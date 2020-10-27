@@ -193,6 +193,149 @@ void dsa_port_bridge_leave(struct dsa_port *dp, struct net_device *br)
 	dsa_port_set_state_now(dp, BR_STATE_FORWARDING);
 }
 
+static struct dsa_lag *dsa_lag_get(struct dsa_switch_tree *dst,
+				   struct net_device *dev)
+{
+	unsigned long busy = 0;
+	struct dsa_lag *lag;
+	int id;
+
+	list_for_each_entry(lag, &dst->lags, list) {
+		set_bit(lag->id, &busy);
+
+		if (lag->dev == dev) {
+			kref_get(&lag->refcount);
+			return lag;
+		}
+	}
+
+	id = find_first_zero_bit(&busy, BITS_PER_LONG);
+	if (id >= BITS_PER_LONG)
+		return ERR_PTR(-ENOSPC);
+
+	lag = kzalloc(sizeof(*lag), GFP_KERNEL);
+	if (!lag)
+		return ERR_PTR(-ENOMEM);
+
+	kref_init(&lag->refcount);
+	lag->id = id;
+	lag->dev = dev;
+	INIT_LIST_HEAD(&lag->ports);
+	INIT_LIST_HEAD(&lag->tx_ports);
+
+	INIT_LIST_HEAD(&lag->list);
+	list_add_tail_rcu(&lag->list, &dst->lags);
+	return lag;
+}
+
+static void dsa_lag_release(struct kref *refcount)
+{
+	struct dsa_lag *lag = container_of(refcount, struct dsa_lag, refcount);
+
+	list_del_rcu(&lag->list);
+	synchronize_rcu();
+	kfree(lag);
+}
+
+static void dsa_lag_put(struct dsa_lag *lag)
+{
+	kref_put(&lag->refcount, dsa_lag_release);
+}
+
+int dsa_port_lag_change(struct dsa_port *dp,
+			struct netdev_lag_lower_state_info *linfo)
+{
+	struct dsa_notifier_lag_info info = {
+		.sw_index = dp->ds->index,
+		.port = dp->index,
+		.info = linfo,
+	};
+	bool old, new;
+
+	if (!dp->lag)
+		return 0;
+
+	info.lag = dp->lag->dev;
+
+	/* If this port is on the tx list, it is already enabled. */
+	old = !list_empty(&dp->lag_tx_list);
+
+	/* On statically configured aggregates (e.g. loadbalance
+	 * without LACP) ports will always be tx_enabled, even if the
+	 * link is down. Thus we require both link_up and tx_enabled
+	 * in order to include it in the tx set.
+	 */
+	new = linfo->link_up && linfo->tx_enabled;
+
+	if (new == old)
+		return 0;
+
+	if (new) {
+		dp->lag->num_tx++;
+		list_add_tail(&dp->lag_tx_list, &dp->lag->tx_ports);
+	} else {
+		list_del_init(&dp->lag_tx_list);
+		dp->lag->num_tx--;
+	}
+
+	return dsa_port_notify(dp, DSA_NOTIFIER_LAG_CHANGE, &info);
+}
+
+int dsa_port_lag_join(struct dsa_port *dp, struct net_device *lag_dev)
+{
+	struct dsa_notifier_lag_info info = {
+		.sw_index = dp->ds->index,
+		.port = dp->index,
+		.lag = lag_dev,
+	};
+	struct dsa_lag *lag;
+	int err;
+
+	lag = dsa_lag_get(dp->ds->dst, lag_dev);
+	if (IS_ERR(lag))
+		return PTR_ERR(lag);
+
+	dp->lag = lag;
+	list_add_tail(&dp->lag_list, &lag->ports);
+
+	err = dsa_port_notify(dp, DSA_NOTIFIER_LAG_JOIN, &info);
+	if (err) {
+		dp->lag = NULL;
+		list_del_init(&dp->lag_list);
+		dsa_lag_put(lag);
+	}
+
+	return err;
+}
+
+void dsa_port_lag_leave(struct dsa_port *dp, struct net_device *lag_dev)
+{
+	struct dsa_notifier_lag_info info = {
+		.sw_index = dp->ds->index,
+		.port = dp->index,
+		.lag = lag_dev,
+	};
+	int err;
+
+	/* Port might have been part of a LAG that in turn was
+	 * attached to a bridge.
+	 */
+	if (dp->bridge_dev)
+		dsa_port_bridge_leave(dp, dp->bridge_dev);
+
+	list_del_init(&dp->lag_list);
+	list_del_init(&dp->lag_tx_list);
+
+	err = dsa_port_notify(dp, DSA_NOTIFIER_LAG_LEAVE, &info);
+	if (err)
+		pr_err("DSA: failed to notify DSA_NOTIFIER_LAG_LEAVE: %d\n",
+		       err);
+
+	dsa_lag_put(dp->lag);
+
+	dp->lag = NULL;
+}
+
 /* Must be called under rcu_read_lock() */
 static bool dsa_port_can_apply_vlan_filtering(struct dsa_port *dp,
 					      bool vlan_filtering)

@@ -147,6 +147,9 @@ struct dsa_switch_tree {
 	/* List of switch ports */
 	struct list_head ports;
 
+	/* List of configured LAGs */
+	struct list_head lags;
+
 	/* List of DSA links composing the routing table */
 	struct list_head rtable;
 };
@@ -180,6 +183,49 @@ struct dsa_mall_tc_entry {
 	};
 };
 
+struct dsa_lag {
+	struct net_device *dev;
+	int id;
+
+	struct list_head ports;
+
+	/* For multichip systems, we must ensure that each hash bucket
+	 * is only enabled on a single egress port throughout the
+	 * whole tree, lest we send duplicates. Therefore we must
+	 * maintain a global list of active tx ports, so that each
+	 * switch can figure out which buckets to enable on which
+	 * ports.
+	 */
+	struct list_head tx_ports;
+	int num_tx;
+
+	struct kref refcount;
+	struct list_head list;
+};
+
+static inline struct dsa_lag *dsa_lag_by_dev(struct dsa_switch_tree *dst,
+					     struct net_device *dev)
+{
+	struct dsa_lag *lag;
+
+	list_for_each_entry(lag, &dst->lags, list)
+		if (lag->dev == dev)
+			return lag;
+
+	return NULL;
+}
+
+static inline struct net_device *dsa_lag_dev_by_id(struct dsa_switch_tree *dst,
+						   int id)
+{
+	struct dsa_lag *lag;
+
+	list_for_each_entry_rcu(lag, &dst->lags, list)
+		if (lag->id == id)
+			return lag->dev;
+
+	return NULL;
+}
 
 struct dsa_port {
 	/* A CPU port is physically connected to a master device.
@@ -220,6 +266,9 @@ struct dsa_port {
 	bool			devlink_port_setup;
 	struct phylink		*pl;
 	struct phylink_config	pl_config;
+	struct dsa_lag		*lag;
+	struct list_head	lag_list;
+	struct list_head	lag_tx_list;
 
 	struct list_head list;
 
@@ -624,6 +673,13 @@ struct dsa_switch_ops {
 	void	(*crosschip_bridge_leave)(struct dsa_switch *ds, int tree_index,
 					  int sw_index, int port,
 					  struct net_device *br);
+	int	(*crosschip_lag_change)(struct dsa_switch *ds, int sw_index,
+					int port, struct net_device *lag_dev,
+					struct netdev_lag_lower_state_info *info);
+	int	(*crosschip_lag_join)(struct dsa_switch *ds, int sw_index,
+				      int port, struct net_device *lag_dev);
+	void	(*crosschip_lag_leave)(struct dsa_switch *ds, int sw_index,
+				       int port, struct net_device *lag_dev);
 
 	/*
 	 * PTP functionality
@@ -655,6 +711,16 @@ struct dsa_switch_ops {
 	int	(*port_change_mtu)(struct dsa_switch *ds, int port,
 				   int new_mtu);
 	int	(*port_max_mtu)(struct dsa_switch *ds, int port);
+
+	/*
+	 * LAG integration
+	 */
+	int	(*port_lag_change)(struct dsa_switch *ds, int port,
+				   struct netdev_lag_lower_state_info *info);
+	int	(*port_lag_join)(struct dsa_switch *ds, int port,
+				 struct net_device *lag_dev);
+	void	(*port_lag_leave)(struct dsa_switch *ds, int port,
+				  struct net_device *lag_dev);
 };
 
 #define DSA_DEVLINK_PARAM_DRIVER(_id, _name, _type, _cmodes)		\

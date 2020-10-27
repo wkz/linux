@@ -66,6 +66,7 @@ static struct dsa_switch_tree *dsa_tree_alloc(int index)
 	INIT_LIST_HEAD(&dst->rtable);
 
 	INIT_LIST_HEAD(&dst->ports);
+	INIT_LIST_HEAD(&dst->lags);
 
 	INIT_LIST_HEAD(&dst->list);
 	list_add_tail(&dst->list, &dsa_tree_list);
@@ -659,6 +660,8 @@ static struct dsa_port *dsa_port_touch(struct dsa_switch *ds, int index)
 	dp->index = index;
 
 	INIT_LIST_HEAD(&dp->list);
+	INIT_LIST_HEAD(&dp->lag_list);
+	INIT_LIST_HEAD(&dp->lag_tx_list);
 	list_add_tail(&dp->list, &dst->ports);
 
 	return dp;
