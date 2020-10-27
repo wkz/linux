@@ -573,6 +573,10 @@ struct mv88e6xxx_ops {
 
 	/* Max Frame Size */
 	int (*set_max_frame_size)(struct mv88e6xxx_chip *chip, int mtu);
+
+	/* Link aggregation */
+	int (*lag_set_map)(struct mv88e6xxx_chip *chip, struct dsa_lag *lag);
+	int (*lag_set_masks)(struct mv88e6xxx_chip *chip, struct dsa_lag *lag);
 };
 
 struct mv88e6xxx_irq_ops {

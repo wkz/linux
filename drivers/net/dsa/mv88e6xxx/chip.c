@@ -1189,7 +1189,8 @@ static int mv88e6xxx_set_mac_eee(struct dsa_switch *ds, int port,
 }
 
 /* Mask of the local ports allowed to receive frames from a given fabric port */
-static u16 mv88e6xxx_port_vlan(struct mv88e6xxx_chip *chip, int dev, int port)
+static u16 mv88e6xxx_port_vlan(struct mv88e6xxx_chip *chip, int dev, int port,
+			       struct dsa_lag **lag)
 {
 	struct dsa_switch *ds = chip->ds;
 	struct dsa_switch_tree *dst = ds->dst;
@@ -1201,6 +1202,9 @@ static u16 mv88e6xxx_port_vlan(struct mv88e6xxx_chip *chip, int dev, int port)
 	list_for_each_entry(dp, &dst->ports, list) {
 		if (dp->ds->index == dev && dp->index == port) {
 			found = true;
+
+			if (dp->lag && lag)
+				*lag = dp->lag;
 			break;
 		}
 	}
@@ -1231,7 +1235,9 @@ static u16 mv88e6xxx_port_vlan(struct mv88e6xxx_chip *chip, int dev, int port)
 
 static int mv88e6xxx_port_vlan_map(struct mv88e6xxx_chip *chip, int port)
 {
-	u16 output_ports = mv88e6xxx_port_vlan(chip, chip->ds->index, port);
+	u16 output_ports;
+
+	output_ports = mv88e6xxx_port_vlan(chip, chip->ds->index, port, NULL);
 
 	/* prevent frames from going back out of the port they came in on */
 	output_ports &= ~BIT(port);
@@ -1389,14 +1395,21 @@ static int mv88e6xxx_mac_setup(struct mv88e6xxx_chip *chip)
 
 static int mv88e6xxx_pvt_map(struct mv88e6xxx_chip *chip, int dev, int port)
 {
+	struct dsa_lag *lag = NULL;
 	u16 pvlan = 0;
 
 	if (!mv88e6xxx_has_pvt(chip))
 		return 0;
 
 	/* Skip the local source device, which uses in-chip port VLAN */
-	if (dev != chip->ds->index)
-		pvlan = mv88e6xxx_port_vlan(chip, dev, port);
+	if (dev != chip->ds->index) {
+		pvlan = mv88e6xxx_port_vlan(chip, dev, port, &lag);
+
+		if (lag) {
+			dev = MV88E6XXX_G2_PVT_ADRR_DEV_TRUNK;
+			port = lag->id;
+		}
+	}
 
 	return mv88e6xxx_g2_pvt_write(chip, dev, port, pvlan);
 }
@@ -5327,6 +5340,205 @@ static int mv88e6xxx_port_egress_floods(struct dsa_switch *ds, int port,
 	return err;
 }
 
+static int mv88e6xxx_lag_sync_map(struct dsa_switch *ds, struct dsa_lag *lag)
+{
+	struct mv88e6xxx_chip *chip = ds->priv;
+	struct dsa_port *dp;
+	u16 map = 0;
+
+	/* Build the map of all ports to distribute flows destined for
+	 * this LAG. This can be either a local user port, or a DSA
+	 * port if the LAG port is on a remote chip.
+	 */
+	list_for_each_entry(dp, &lag->ports, lag_list) {
+		map |= BIT(dsa_towards_port(ds, dp->ds->index, dp->index));
+	}
+
+	return mv88e6xxx_g2_trunk_mapping_write(chip, lag->id, map);
+}
+
+static const u8 mv88e6xxx_lag_mask_table[8][8] = {
+	/* Row number corresponds to the number of active members in a
+	 * LAG. Each column states which of the eight hash buckets are
+	 * mapped to the column:th port in the LAG.
+	 *
+	 * Example: In a LAG with three active ports, the second port
+	 * ([2][1]) would be selected for traffic mapped to buckets
+	 * 3,4,5 (0x38).
+	 */
+	{ 0xff,    0,    0,    0,    0,    0,    0,    0 },
+	{ 0x0f, 0xf0,    0,    0,    0,    0,    0,    0 },
+	{ 0x07, 0x38, 0xc0,    0,    0,    0,    0,    0 },
+	{ 0x03, 0x0c, 0x30, 0xc0,    0,    0,    0,    0 },
+	{ 0x03, 0x0c, 0x30, 0x40, 0x80,    0,    0,    0 },
+	{ 0x03, 0x0c, 0x10, 0x20, 0x40, 0x80,    0,    0 },
+	{ 0x03, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,    0 },
+	{ 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80 },
+};
+
+static void mv88e6xxx_lag_set_port_mask(u16 *mask, int port,
+					int num_tx, int nth)
+{
+	u8 active = 0;
+	int i;
+
+	num_tx = num_tx <= 8 ? num_tx : 8;
+	if (nth < num_tx)
+		active = mv88e6xxx_lag_mask_table[num_tx - 1][nth];
+
+	for (i = 0; i < 8; i++) {
+		if (BIT(i) & active)
+			mask[i] |= BIT(port);
+	}
+}
+
+static int mv88e6xxx_lag_sync_masks(struct dsa_switch *ds)
+{
+	struct mv88e6xxx_chip *chip = ds->priv;
+	struct dsa_port *dp;
+	struct dsa_lag *lag;
+	int i, err, nth;
+	u16 mask[8] = { 0 };
+	u16 ivec;
+
+	/* Assume no port is a member of any LAG. */
+	ivec = BIT(mv88e6xxx_num_ports(chip)) - 1;
+
+	/* Disable all masks for ports that _are_ members of a LAG. */
+	list_for_each_entry(lag, &ds->dst->lags, list) {
+		list_for_each_entry(dp, &lag->ports, lag_list) {
+			if (dp->ds != ds)
+				continue;
+
+			ivec &= ~BIT(dp->index);
+		}
+	}
+
+	for (i = 0; i < 8; i++)
+		mask[i] = ivec;
+
+	/* Enable the correct subset of masks for all LAG ports that
+	 * are in the Tx set.
+	 */
+	list_for_each_entry(lag, &ds->dst->lags, list) {
+		if (!lag->num_tx)
+			continue;
+
+		nth = 0;
+		list_for_each_entry(dp, &lag->tx_ports, lag_tx_list) {
+			if (dp->ds == ds)
+				mv88e6xxx_lag_set_port_mask(mask, dp->index,
+							    lag->num_tx, nth);
+
+			nth++;
+		}
+	}
+
+	for (i = 0; i < 8; i++) {
+		err = mv88e6xxx_g2_trunk_mask_write(chip, i, true, mask[i]);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+static int mv88e6xxx_lag_sync_masks_map(struct dsa_switch *ds,
+					struct dsa_lag *lag)
+{
+	int err;
+
+	err = mv88e6xxx_lag_sync_masks(ds);
+
+	if (!err)
+		err = mv88e6xxx_lag_sync_map(ds, lag);
+
+	return err;
+}
+
+static int mv88e6xxx_port_lag_change(struct dsa_switch *ds, int port,
+				     struct netdev_lag_lower_state_info *info)
+{
+	struct mv88e6xxx_chip *chip = ds->priv;
+	int err;
+
+	mv88e6xxx_reg_lock(chip);
+	err = mv88e6xxx_lag_sync_masks(ds);
+	mv88e6xxx_reg_unlock(chip);
+	return err;
+}
+
+static int mv88e6xxx_port_lag_join(struct dsa_switch *ds, int port,
+				   struct net_device *lag_dev)
+{
+	struct dsa_lag *lag = dsa_to_port(ds, port)->lag;
+	struct mv88e6xxx_chip *chip = ds->priv;
+	int err;
+
+	mv88e6xxx_reg_lock(chip);
+
+	err = mv88e6xxx_port_set_trunk(chip, port, true, lag->id);
+	if (err)
+		goto unlock;
+
+	err = mv88e6xxx_lag_sync_map(ds, lag);
+	if (err)
+		mv88e6xxx_port_set_trunk(chip, port, false, 0);
+
+unlock:
+	mv88e6xxx_reg_unlock(chip);
+	return err;
+}
+
+static void mv88e6xxx_port_lag_leave(struct dsa_switch *ds, int port,
+				     struct net_device *lag_dev)
+{
+	struct dsa_lag *lag = dsa_to_port(ds, port)->lag;
+	struct mv88e6xxx_chip *chip = ds->priv;
+
+	mv88e6xxx_reg_lock(chip);
+	mv88e6xxx_lag_sync_masks_map(ds, lag);
+	mv88e6xxx_port_set_trunk(chip, port, false, 0);
+	mv88e6xxx_reg_unlock(chip);
+}
+
+static int mv88e6xxx_crosschip_lag_change(struct dsa_switch *ds, int sw_index,
+					  int port, struct net_device *lag_dev,
+					  struct netdev_lag_lower_state_info *info)
+{
+	struct mv88e6xxx_chip *chip = ds->priv;
+	int err;
+
+	mv88e6xxx_reg_lock(chip);
+	err = mv88e6xxx_lag_sync_masks(ds);
+	mv88e6xxx_reg_unlock(chip);
+	return err;
+}
+
+static int mv88e6xxx_crosschip_lag_join(struct dsa_switch *ds, int sw_index,
+					int port, struct net_device *lag_dev)
+{
+	struct dsa_lag *lag = dsa_lag_by_dev(ds->dst, lag_dev);
+	struct mv88e6xxx_chip *chip = ds->priv;
+	int err;
+
+	mv88e6xxx_reg_lock(chip);
+	err = mv88e6xxx_lag_sync_map(ds, lag);
+	mv88e6xxx_reg_unlock(chip);
+	return err;
+}
+
+static void mv88e6xxx_crosschip_lag_leave(struct dsa_switch *ds, int sw_index,
+					  int port, struct net_device *lag_dev)
+{
+	struct dsa_lag *lag = dsa_lag_by_dev(ds->dst, lag_dev);
+	struct mv88e6xxx_chip *chip = ds->priv;
+
+	mv88e6xxx_reg_lock(chip);
+	mv88e6xxx_lag_sync_masks_map(ds, lag);
+	mv88e6xxx_reg_unlock(chip);
+}
+
 static const struct dsa_switch_ops mv88e6xxx_switch_ops = {
 	.get_tag_protocol	= mv88e6xxx_get_tag_protocol,
 	.setup			= mv88e6xxx_setup,
@@ -5381,6 +5593,12 @@ static const struct dsa_switch_ops mv88e6xxx_switch_ops = {
 	.devlink_param_get	= mv88e6xxx_devlink_param_get,
 	.devlink_param_set	= mv88e6xxx_devlink_param_set,
 	.devlink_info_get	= mv88e6xxx_devlink_info_get,
+	.port_lag_change	= mv88e6xxx_port_lag_change,
+	.port_lag_join		= mv88e6xxx_port_lag_join,
+	.port_lag_leave		= mv88e6xxx_port_lag_leave,
+	.crosschip_lag_change	= mv88e6xxx_crosschip_lag_change,
+	.crosschip_lag_join	= mv88e6xxx_crosschip_lag_join,
+	.crosschip_lag_leave	= mv88e6xxx_crosschip_lag_leave,
 };
 
 static int mv88e6xxx_register_switch(struct mv88e6xxx_chip *chip)
