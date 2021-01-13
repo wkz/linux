@@ -813,6 +813,12 @@ struct dsa_switch_ops {
 					  const struct switchdev_obj_ring_role_mrp *mrp);
 	int	(*port_mrp_del_ring_role)(struct dsa_switch *ds, int port,
 					  const struct switchdev_obj_ring_role_mrp *mrp);
+
+	/* L2 forward offloading */
+	void *	(*dfwd_add_station)(struct dsa_switch *ds, int port,
+				    struct net_device *sb_dev);
+	void	(*dfwd_del_station)(struct dsa_switch *ds, int port,
+				    struct net_device *sb_dev);
 };
 
 #define DSA_DEVLINK_PARAM_DRIVER(_id, _name, _type, _cmodes)		\
