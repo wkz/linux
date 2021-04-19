@@ -459,7 +459,8 @@ struct sk_buff *br_handle_vlan(struct net_bridge *br,
 		u64_stats_update_end(&stats->syncp);
 	}
 
-	if (v->flags & BRIDGE_VLAN_INFO_UNTAGGED)
+	if ((v->flags & BRIDGE_VLAN_INFO_UNTAGGED) &&
+	    nbp_switchdev_should_untag(p, skb))
 		__vlan_hwaccel_clear_tag(skb);
 
 	if (p && (p->flags & BR_VLAN_TUNNEL) &&

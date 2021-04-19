@@ -57,6 +57,7 @@ struct br_ip_list {
 #define BR_MRP_AWARE		BIT(17)
 #define BR_MRP_LOST_CONT	BIT(18)
 #define BR_MRP_LOST_IN_CONT	BIT(19)
+#define BR_FORWARD_OFFLOAD	BIT(20)
 
 #define BR_DEFAULT_AGEING_TIME	(300 * HZ)
 
@@ -146,6 +147,15 @@ static inline int br_vlan_replay(struct net_device *br_dev,
 				 struct netlink_ext_ack *extack)
 {
 	return -EOPNOTSUPP;
+}
+#endif
+
+#if IS_ENABLED(CONFIG_BRIDGE) && IS_ENABLED(CONFIG_NET_SWITCHDEV)
+void *br_switchdev_accel_priv_rcu(const struct net_device *dev);
+#else
+static inline void *br_switchdev_accel_priv_rcu(const struct net_device *dev)
+{
+	return NULL;
 }
 #endif
 

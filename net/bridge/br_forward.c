@@ -48,7 +48,7 @@ int br_dev_queue_push_xmit(struct net *net, struct sock *sk, struct sk_buff *skb
 		skb_set_network_header(skb, depth);
 	}
 
-	dev_queue_xmit(skb);
+	br_dev_queue_xmit(skb);
 
 	return 0;
 
@@ -104,6 +104,8 @@ static void __br_forward(const struct net_bridge_port *to,
 		net = dev_net(skb->dev);
 		indev = NULL;
 	}
+
+	nbp_switchdev_frame_mark_accel(to, skb);
 
 	NF_HOOK(NFPROTO_BRIDGE, br_hook,
 		net, NULL, skb, indev, skb->dev,
@@ -173,6 +175,8 @@ static struct net_bridge_port *maybe_deliver(
 
 	if (!should_deliver(p, skb))
 		return prev;
+
+	nbp_switchdev_frame_mark_fwd(p, skb);
 
 	if (!prev)
 		goto out;

@@ -328,6 +328,7 @@ struct net_bridge_port {
 #endif
 #ifdef CONFIG_NET_SWITCHDEV
 	int				hwdom;
+	void				*accel_priv;
 #endif
 	u16				group_fwd_mask;
 	u16				backup_redirected_cnt;
@@ -503,6 +504,11 @@ struct br_input_skb_cb {
 
 #ifdef CONFIG_NET_SWITCHDEV
 	int src_hwdom;
+
+	union {
+		unsigned long fwd_hwdoms;
+		struct net_device *sb_dev;
+	};
 #endif
 };
 
@@ -1593,6 +1599,54 @@ static inline void br_sysfs_delbr(struct net_device *dev) { return; }
 
 /* br_switchdev.c */
 #ifdef CONFIG_NET_SWITCHDEV
+
+DECLARE_STATIC_KEY_FALSE(br_switchdev_fwd_offload_used);
+
+static inline void br_dev_queue_xmit(struct sk_buff *skb)
+{
+	dev_queue_xmit_accel(skb, BR_INPUT_SKB_CB(skb)->sb_dev);
+}
+
+static inline bool nbp_switchdev_can_accel(const struct net_bridge_port *p,
+					   const struct sk_buff *skb)
+{
+	return (p->flags & BR_FORWARD_OFFLOAD) &&
+		(p->hwdom != BR_INPUT_SKB_CB(skb)->src_hwdom);
+}
+
+static inline bool nbp_switchdev_should_untag(const struct net_bridge_port *p,
+					      const struct sk_buff *skb)
+{
+	if (static_branch_unlikely(&br_switchdev_fwd_offload_used))
+		return !(p && nbp_switchdev_can_accel(p, skb));
+
+	return true;
+}
+
+static inline void nbp_switchdev_frame_mark_accel(const struct net_bridge_port *p,
+						  struct sk_buff *skb)
+{
+	if (static_branch_unlikely(&br_switchdev_fwd_offload_used)) {
+		struct br_input_skb_cb *cb = BR_INPUT_SKB_CB(skb);
+
+		if (nbp_switchdev_can_accel(p, skb)) {
+			skb->offload_fwd_mark = 1;
+			cb->sb_dev = cb->brdev;
+		} else {
+			skb->offload_fwd_mark = 0;
+			cb->sb_dev = NULL;
+		}
+	}
+}
+
+static inline void nbp_switchdev_frame_mark_fwd(const struct net_bridge_port *p,
+						struct sk_buff *skb)
+{
+	if (static_branch_unlikely(&br_switchdev_fwd_offload_used) &&
+	    nbp_switchdev_can_accel(p, skb))
+		set_bit(p->hwdom, &BR_INPUT_SKB_CB(skb)->fwd_hwdoms);
+}
+
 void nbp_switchdev_frame_mark(const struct net_bridge_port *p,
 			      struct sk_buff *skb);
 bool nbp_switchdev_allowed_egress(const struct net_bridge_port *p,
@@ -1614,6 +1668,27 @@ static inline void br_switchdev_frame_unmark(struct sk_buff *skb)
 	skb->offload_fwd_mark = 0;
 }
 #else
+static inline void br_dev_queue_xmit(struct sk_buff *skb)
+{
+	dev_queue_xmit(skb);
+}
+
+static inline bool nbp_switchdev_should_untag(const struct net_bridge_port *p,
+					      const struct sk_buff *skb)
+{
+	return true;
+}
+
+static inline void nbp_switchdev_frame_mark_accel(const struct net_bridge_port *p,
+						  struct sk_buff *skb)
+{
+}
+
+static inline void nbp_switchdev_frame_mark_fwd(const struct net_bridge_port *p,
+						struct sk_buff *skb)
+{
+}
+
 static inline void nbp_switchdev_frame_mark(const struct net_bridge_port *p,
 					    struct sk_buff *skb)
 {

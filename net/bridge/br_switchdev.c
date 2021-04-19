@@ -8,6 +8,8 @@
 
 #include "br_private.h"
 
+DEFINE_STATIC_KEY_FALSE(br_switchdev_fwd_offload_used);
+
 void nbp_switchdev_frame_mark(const struct net_bridge_port *p,
 			      struct sk_buff *skb)
 {
@@ -18,8 +20,20 @@ void nbp_switchdev_frame_mark(const struct net_bridge_port *p,
 bool nbp_switchdev_allowed_egress(const struct net_bridge_port *p,
 				  const struct sk_buff *skb)
 {
+	if (static_branch_unlikely(&br_switchdev_fwd_offload_used)) {
+		if (test_bit(p->hwdom, &BR_INPUT_SKB_CB(skb)->fwd_hwdoms))
+			return false;
+	}
+
 	return !skb->offload_fwd_mark ||
 	       BR_INPUT_SKB_CB(skb)->src_hwdom != p->hwdom;
+}
+
+void *br_switchdev_accel_priv_rcu(const struct net_device *dev)
+{
+	const struct net_bridge_port *p = br_port_get_rcu(dev);
+
+	return p->accel_priv;
 }
 
 /* Flags that can be offloaded to hardware */
@@ -125,6 +139,33 @@ int br_switchdev_port_vlan_del(struct net_device *dev, u16 vid)
 	return switchdev_port_obj_del(dev, &v.obj);
 }
 
+static void nbp_switchdev_fwd_offload_add(struct net_bridge_port *p)
+{
+	void *priv;
+
+	if (!(p->dev->features & NETIF_F_HW_L2FW_DOFFLOAD))
+		return;
+
+	priv = p->dev->netdev_ops->ndo_dfwd_add_station(p->dev, p->br->dev);
+	if (!IS_ERR_OR_NULL(priv)) {
+		static_branch_inc(&br_switchdev_fwd_offload_used);
+		p->flags |= BR_FORWARD_OFFLOAD;
+		p->accel_priv = priv;
+	}
+}
+
+static void nbp_switchdev_fwd_offload_del(struct net_bridge_port *p)
+{
+	if (!(p->flags & BR_FORWARD_OFFLOAD))
+		return;
+
+	p->dev->netdev_ops->ndo_dfwd_del_station(p->dev, p->accel_priv);
+
+	p->accel_priv = NULL;
+	p->flags &= ~BR_FORWARD_OFFLOAD;
+	static_branch_dec(&br_switchdev_fwd_offload_used);
+}
+
 static int nbp_switchdev_hwdom_set(struct net_bridge_port *joining)
 {
 	struct net_bridge *br = joining->br;
@@ -153,6 +194,9 @@ static void nbp_switchdev_hwdom_put(struct net_bridge_port *leaving)
 	struct net_bridge *br = leaving->br;
 	struct net_bridge_port *p;
 
+	if (!leaving->hwdom)
+		return;
+
 	/* leaving is no longer in the port list. */
 	list_for_each_entry(p, &br->port_list, list) {
 		if (p->hwdom == leaving->hwdom)
@@ -176,13 +220,20 @@ int nbp_switchdev_add(struct net_bridge_port *p)
 		return err;
 	}
 
-	return nbp_switchdev_hwdom_set(p);
+	err = nbp_switchdev_hwdom_set(p);
+	if (err)
+		return err;
+
+	if (p->hwdom)
+		nbp_switchdev_fwd_offload_add(p);
+
+	return 0;
 }
 
 void nbp_switchdev_del(struct net_bridge_port *p)
 {
 	ASSERT_RTNL();
 
-	if (p->hwdom)
-		nbp_switchdev_hwdom_put(p);
+	nbp_switchdev_fwd_offload_del(p);
+	nbp_switchdev_hwdom_put(p);
 }
