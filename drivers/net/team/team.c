@@ -2056,6 +2056,8 @@ static const struct net_device_ops team_netdev_ops = {
 	.ndo_fix_features	= team_fix_features,
 	.ndo_change_carrier     = team_change_carrier,
 	.ndo_features_check	= passthru_features_check,
+	.ndo_dfwd_add_station	= netdev_stacked_dfwd_add_station,
+	.ndo_dfwd_del_station	= netdev_stacked_dfwd_del_station,
 };
 
 /***********************
@@ -2176,6 +2178,7 @@ static void team_setup(struct net_device *dev)
 			   NETIF_F_HW_VLAN_CTAG_FILTER;
 
 	dev->hw_features |= NETIF_F_GSO_ENCAP_ALL;
+	dev->hw_features |= NETIF_F_HW_L2FW_DOFFLOAD;
 	dev->features |= dev->hw_features;
 	dev->features |= NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_STAG_TX;
 }

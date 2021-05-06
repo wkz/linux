@@ -10704,6 +10704,52 @@ void netdev_set_default_ethtool_ops(struct net_device *dev,
 }
 EXPORT_SYMBOL_GPL(netdev_set_default_ethtool_ops);
 
+void *netdev_stacked_dfwd_add_station(struct net_device *dev,
+				      struct net_device *sb_dev)
+{
+	struct net_device *lower, *lower_last = NULL;
+	void *priv, *priv_last = NULL;
+	struct list_head *iter;
+
+	netdev_for_each_lower_dev(dev, lower, iter) {
+		if (!lower->netdev_ops->ndo_dfwd_add_station)
+			return ERR_PTR(-EOPNOTSUPP);
+
+		if (lower_last && !netdev_port_same_parent_id(lower, lower_last))
+			return ERR_PTR(-EOPNOTSUPP);
+
+		lower_last = lower;
+	}
+
+	netdev_for_each_lower_dev(dev, lower, iter) {
+		priv = lower->netdev_ops->ndo_dfwd_add_station(lower, sb_dev);
+		if (IS_ERR(priv))
+			return priv;
+
+		if (!priv || (priv_last && (priv != priv_last)))
+			return ERR_PTR(-EINVAL);
+
+		priv_last = priv;
+	}
+
+	return priv_last;
+}
+EXPORT_SYMBOL_GPL(netdev_stacked_dfwd_add_station);
+
+void netdev_stacked_dfwd_del_station(struct net_device *dev, void *accel_priv)
+{
+	struct net_device *lower;
+	struct list_head *iter;
+
+	netdev_for_each_lower_dev(dev, lower, iter) {
+		if (!lower->netdev_ops->ndo_dfwd_del_station)
+			continue;
+
+		lower->netdev_ops->ndo_dfwd_del_station(lower, accel_priv);
+	}
+}
+EXPORT_SYMBOL_GPL(netdev_stacked_dfwd_del_station);
+
 void netdev_freemem(struct net_device *dev)
 {
 	char *addr = (char *)dev - dev->padded;

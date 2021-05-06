@@ -2974,6 +2974,10 @@ void free_netdev(struct net_device *dev);
 void netdev_freemem(struct net_device *dev);
 int init_dummy_netdev(struct net_device *dev);
 
+void *netdev_stacked_dfwd_add_station(struct net_device *dev,
+				      struct net_device *sb_dev);
+void netdev_stacked_dfwd_del_station(struct net_device *dev, void *accel_priv);
+
 struct net_device *netdev_get_xmit_slave(struct net_device *dev,
 					 struct sk_buff *skb,
 					 bool all_slaves);
