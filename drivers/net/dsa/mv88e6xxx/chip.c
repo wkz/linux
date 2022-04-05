@@ -2324,6 +2324,34 @@ static int mv88e6xxx_set_rxnfc(struct dsa_switch *ds, int port,
 	return err;
 }
 
+static bool mv88e6xxx_port_should_flood(struct mv88e6xxx_chip *chip,
+					int port, bool *new_flood)
+{
+	struct net_device *port_dev;
+	struct dsa_port *dp;
+
+	if (new_flood)
+		return *new_flood;
+
+	dp = dsa_to_port(chip->ds, port);
+
+	port_dev = dsa_port_to_bridge_port(dp);
+	if (!port_dev)
+		return true;
+
+	return br_port_flag_is_set(port_dev, BR_MCAST_FLOOD);
+}
+
+static int mv88e6xxx_port_update_mcast_flood(struct mv88e6xxx_chip *chip,
+					     int port, bool *new_flood)
+{
+	bool flood;
+
+	flood = mv88e6xxx_port_should_flood(chip, port, new_flood);
+
+	return chip->info->ops->port_set_mcast_flood(chip, port, flood);
+}
+
 static int mv88e6xxx_port_add_broadcast(struct mv88e6xxx_chip *chip, int port,
 					u16 vid)
 {
@@ -3082,8 +3110,11 @@ static int mv88e6xxx_setup_egress_floods(struct mv88e6xxx_chip *chip, int port)
 		if (err)
 			return err;
 	}
+
 	if (chip->info->ops->port_set_mcast_flood) {
-		err = chip->info->ops->port_set_mcast_flood(chip, port, true);
+		bool flood = true;
+
+		err = mv88e6xxx_port_update_mcast_flood(chip, port, &flood);
 		if (err)
 			return err;
 	}
@@ -6473,8 +6504,7 @@ static int mv88e6xxx_port_bridge_flags(struct dsa_switch *ds, int port,
 	if (flags.mask & BR_MCAST_FLOOD) {
 		bool multicast = !!(flags.val & BR_MCAST_FLOOD);
 
-		err = chip->info->ops->port_set_mcast_flood(chip, port,
-							    multicast);
+		err = mv88e6xxx_port_update_mcast_flood(chip, port, &multicast);
 		if (err)
 			goto out;
 	}
