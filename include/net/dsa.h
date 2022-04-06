@@ -1053,6 +1053,9 @@ struct dsa_switch_ops {
 				     struct netlink_ext_ack *extack);
 	void	(*port_set_host_flood)(struct dsa_switch *ds, int port,
 				       bool uc, bool mc);
+	int	(*port_mrouter_set)(struct dsa_switch *ds, int port,
+				    bool mrouter,
+				    struct netlink_ext_ack *extack);
 
 	/*
 	 * VLAN support

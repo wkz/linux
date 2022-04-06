@@ -1290,6 +1290,17 @@ int dsa_port_bridge_host_mdb_del(const struct dsa_port *dp,
 	return dsa_port_host_mdb_del(dp, mdb, db);
 }
 
+int dsa_port_mrouter_set(struct dsa_port *dp, bool mrouter,
+			 struct netlink_ext_ack *extack)
+{
+	struct dsa_switch *ds = dp->ds;
+
+	if (!ds->ops->port_mrouter_set)
+		return -EOPNOTSUPP;
+
+	return ds->ops->port_mrouter_set(ds, dp->index, mrouter, extack);
+}
+
 int dsa_port_vlan_add(struct dsa_port *dp,
 		      const struct switchdev_obj_port_vlan *vlan,
 		      struct netlink_ext_ack *extack)
