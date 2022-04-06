@@ -2342,12 +2342,29 @@ static bool mv88e6xxx_port_should_flood(struct mv88e6xxx_chip *chip,
 	return br_port_flag_is_set(port_dev, BR_MCAST_FLOOD);
 }
 
+static bool mv88e6xxx_port_has_mrouter(struct mv88e6xxx_chip *chip,
+				      int port, bool *new_mrouter)
+{
+	struct dsa_port *dp;
+
+	if (new_mrouter)
+		return *new_mrouter;
+
+	dp = dsa_to_port(chip->ds, port);
+
+	return dsa_folded_mdb_port_is_router(dp);
+}
+
 static int mv88e6xxx_port_update_mcast_flood(struct mv88e6xxx_chip *chip,
-					     int port, bool *new_flood)
+					     int port, bool *new_flood,
+					     bool *new_mrouter)
 {
 	bool flood;
 
 	flood = mv88e6xxx_port_should_flood(chip, port, new_flood);
+
+	if (!flood)
+		flood = mv88e6xxx_port_has_mrouter(chip, port, new_mrouter);
 
 	return chip->info->ops->port_set_mcast_flood(chip, port, flood);
 }
@@ -3114,7 +3131,8 @@ static int mv88e6xxx_setup_egress_floods(struct mv88e6xxx_chip *chip, int port)
 	if (chip->info->ops->port_set_mcast_flood) {
 		bool flood = true;
 
-		err = mv88e6xxx_port_update_mcast_flood(chip, port, &flood);
+		err = mv88e6xxx_port_update_mcast_flood(chip, port,
+							&flood, NULL);
 		if (err)
 			return err;
 	}
@@ -6383,6 +6401,20 @@ static int mv88e6xxx_port_mdb_del(struct dsa_switch *ds, int port,
 	return err;
 }
 
+static int mv88e6xxx_port_mrouter_set(struct dsa_switch *ds, int port,
+                                      bool mrouter,
+                                      struct netlink_ext_ack *extack)
+{
+        struct mv88e6xxx_chip *chip = ds->priv;
+        int err;
+
+        mv88e6xxx_reg_lock(chip);
+        err = mv88e6xxx_port_update_mcast_flood(chip, port, NULL, &mrouter);
+        mv88e6xxx_reg_unlock(chip);
+
+        return err;
+}
+
 static int mv88e6xxx_port_mirror_add(struct dsa_switch *ds, int port,
 				     struct dsa_mall_mirror_tc_entry *mirror,
 				     bool ingress,
@@ -6504,7 +6536,8 @@ static int mv88e6xxx_port_bridge_flags(struct dsa_switch *ds, int port,
 	if (flags.mask & BR_MCAST_FLOOD) {
 		bool multicast = !!(flags.val & BR_MCAST_FLOOD);
 
-		err = mv88e6xxx_port_update_mcast_flood(chip, port, &multicast);
+		err = mv88e6xxx_port_update_mcast_flood(chip, port,
+							&multicast, NULL);
 		if (err)
 			goto out;
 	}
@@ -6863,6 +6896,7 @@ static const struct dsa_switch_ops mv88e6xxx_switch_ops = {
 	.port_fdb_dump		= mv88e6xxx_port_fdb_dump,
 	.port_mdb_add		= mv88e6xxx_port_mdb_add,
 	.port_mdb_del		= mv88e6xxx_port_mdb_del,
+	.port_mrouter_set       = mv88e6xxx_port_mrouter_set,
 	.port_mirror_add	= mv88e6xxx_port_mirror_add,
 	.port_mirror_del	= mv88e6xxx_port_mirror_del,
 	.crosschip_bridge_join	= mv88e6xxx_crosschip_bridge_join,
@@ -6899,6 +6933,7 @@ static int mv88e6xxx_register_switch(struct mv88e6xxx_chip *chip)
 	ds->ops = &mv88e6xxx_switch_ops;
 	ds->ageing_time_min = chip->info->age_time_coeff;
 	ds->ageing_time_max = chip->info->age_time_coeff * U8_MAX;
+	ds->fold_mrouters_into_mdb = 1;
 
 	/* Some chips support up to 32, but that requires enabling the
 	 * 5-bit port mode, which we do not support. 640k^W16 ought to
