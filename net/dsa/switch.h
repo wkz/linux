@@ -111,6 +111,10 @@ struct dsa_notifier_conduit_state_info {
 	bool operational;
 };
 
+struct dsa_mac_addr *dsa_mac_addr_find(struct list_head *addr_list,
+				       const unsigned char *addr, u16 vid,
+				       struct dsa_db db);
+
 struct dsa_vlan *dsa_vlan_find(struct list_head *vlan_list,
 			       const struct switchdev_obj_port_vlan *vlan);
 

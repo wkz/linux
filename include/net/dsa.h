@@ -236,6 +236,18 @@ struct dsa_bridge {
 	unsigned int num;
 	bool tx_fwd_offload;
 	refcount_t refcount;
+
+	/* Tracks the current set of multicast router ports in this bridge, and
+	 * the tree-global subscriber count of each group. Used by hardware that
+	 * manages router ports alongside regular subscribers in their hardware
+	 * FDBs. Setting ds->fold_mrouters_into_mdb opts in to this feature.
+	 */
+	struct {
+		struct mutex     lock;
+		struct list_head routers;
+		struct list_head mdbs;
+		bool             host_mrouter;
+	} folded_mdb;
 };
 
 struct dsa_port {
@@ -304,6 +316,7 @@ struct dsa_port {
 	struct net_device	*hsr_dev;
 
 	struct list_head list;
+	struct list_head mrouter;
 
 	/*
 	 * Original copy of the conduit netdev ethtool_ops
@@ -376,6 +389,13 @@ struct dsa_mac_addr {
 	struct dsa_db db;
 };
 
+struct dsa_folded_mdb {
+	struct dsa_mac_addr addr;
+	DECLARE_DSA_PORTMAP(members);
+};
+
+bool dsa_folded_mdb_port_is_router(const struct dsa_port *dp);
+
 struct dsa_vlan {
 	u16 vid;
 	refcount_t refcount;
@@ -443,6 +463,12 @@ struct dsa_switch {
 	 * passed as zero.
 	 */
 	u32			fdb_isolation:1;
+
+	/* The underlying hardware has no independent facility for managing
+	 * router ports. Driver expects DSA to assist by adding/removing router
+	 * ports to/from all registered groups via the MDB API.
+	 */
+	u32			fold_mrouters_into_mdb:1;
 
 	/* Listener for switch fabric events */
 	struct notifier_block	nb;

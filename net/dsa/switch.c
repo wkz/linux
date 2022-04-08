@@ -141,9 +141,9 @@ static bool dsa_port_host_address_match(struct dsa_port *dp,
 	return false;
 }
 
-static struct dsa_mac_addr *dsa_mac_addr_find(struct list_head *addr_list,
-					      const unsigned char *addr, u16 vid,
-					      struct dsa_db db)
+struct dsa_mac_addr *dsa_mac_addr_find(struct list_head *addr_list,
+				       const unsigned char *addr, u16 vid,
+				       struct dsa_db db)
 {
 	struct dsa_mac_addr *a;
 

@@ -659,6 +659,12 @@ static int dsa_user_port_attr_set(struct net_device *dev, const void *ctx,
 
 		ret = dsa_port_mrouter_set(dp, attr->u.mrouter, extack);
 		break;
+	case SWITCHDEV_ATTR_ID_BRIDGE_MROUTER:
+		if (!dsa_port_offloads_bridge_dev(dp, attr->orig_dev))
+			return -EOPNOTSUPP;
+
+		ret = dsa_host_mrouter_set(dp, attr->u.mrouter, extack);
+		break;
 	default:
 		ret = -EOPNOTSUPP;
 		break;

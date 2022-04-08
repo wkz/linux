@@ -451,6 +451,10 @@ static int dsa_port_bridge_create(struct dsa_port *dp,
 		return -EOPNOTSUPP;
 	}
 
+	mutex_init(&bridge->folded_mdb.lock);
+	INIT_LIST_HEAD(&bridge->folded_mdb.routers);
+	INIT_LIST_HEAD(&bridge->folded_mdb.mdbs);
+
 	dp->bridge = bridge;
 
 	return 0;
@@ -549,6 +553,12 @@ void dsa_port_pre_bridge_leave(struct dsa_port *dp, struct net_device *br)
 	switchdev_bridge_port_unoffload(brport_dev, dp,
 					&dsa_user_switchdev_notifier,
 					&dsa_user_switchdev_blocking_notifier);
+
+	/* Port's multicast router status is not reset by the bridge
+	 * upon leaving it. We must reset it before actually leaving
+	 * as all folded MDB state is stored in dp->bridge.
+	 */
+	dsa_port_mrouter_set(dp, false, NULL);
 
 	dsa_flush_workqueue();
 }
@@ -1166,8 +1176,347 @@ int dsa_port_fdb_dump(struct dsa_port *dp, dsa_fdb_dump_cb_t *cb, void *data)
 	return ds->ops->port_fdb_dump(ds, port, cb, data);
 }
 
-int dsa_port_mdb_add(const struct dsa_port *dp,
-		     const struct switchdev_obj_port_mdb *mdb)
+static int dsa_port_mdb_notify(const struct dsa_port *dp, unsigned long e,
+			       const struct switchdev_obj_port_mdb *mdb);
+
+static int dsa_host_mdb_notify(const struct dsa_switch_tree *dst, bool add,
+			       struct dsa_bridge *dbr,
+			       const struct switchdev_obj_port_mdb *mdb)
+{
+	struct dsa_notifier_mdb_info info = {
+		.mdb = mdb,
+		.db = {
+			.type = DSA_DB_BRIDGE,
+			.bridge = *dbr,
+		},
+	};
+	const struct dsa_port *dp;
+	unsigned long e;
+	int err = 0;
+
+	e = add ? DSA_NOTIFIER_HOST_MDB_ADD : DSA_NOTIFIER_HOST_MDB_DEL;
+
+	list_for_each_entry(dp, &dst->ports, list) {
+		if (dp->bridge != dbr)
+			continue;
+
+		info.db.bridge.num = dp->ds->fdb_isolation ? dbr->num : 0;
+		info.dp = dp;
+		err = dsa_port_notify(dp, e, &info);
+		if (err)
+			break;
+	}
+
+	return err;
+}
+
+static int dsa_folded_mdb_notify_routers(const struct dsa_port *dp, bool add,
+					 struct dsa_bridge *dbr,
+					 const struct switchdev_obj_port_mdb *mdb)
+{
+	unsigned long e = add ? DSA_NOTIFIER_MDB_ADD : DSA_NOTIFIER_MDB_DEL;
+	struct switchdev_obj_port_mdb rp_mdb = {
+		.obj = {
+			.id = SWITCHDEV_OBJ_ID_PORT_MDB,
+		},
+	};
+	struct dsa_port *rp;
+	int err = 0;
+
+	rp_mdb.vid = mdb->vid;
+	memcpy(rp_mdb.addr, mdb->addr, sizeof(rp_mdb.addr));
+
+	list_for_each_entry(rp, &dbr->folded_mdb.routers, mrouter) {
+		if (rp == dp)
+			/* The first/last port to join/leave the group
+			 * was also a router port. Added/removed by
+			 * dsa_port_mdb_add/del in the normal way.
+			 */
+			continue;
+
+		rp_mdb.obj.orig_dev = dsa_port_to_bridge_port(rp);
+
+		err = dsa_port_mdb_notify(rp, e, &rp_mdb);
+		if (err)
+			break;
+	}
+
+	if (err) {
+		dev_err(rp->ds->dev, "folded_mdb: Unable to %s router port %d: %d\n",
+			add ? "add" : "remove", rp->index, err);
+		return err;
+	}
+
+	if (dbr->folded_mdb.host_mrouter) {
+		rp_mdb.obj.orig_dev = dbr->dev;
+
+		err = dsa_host_mdb_notify(dp->ds->dst, add, dbr, &rp_mdb);
+		if (err) {
+			dev_err(rp->ds->dev,
+				"folded_mdb: Unable to %s host router port: %d\n",
+				add ? "add" : "remove", err);
+			return err;
+		}
+	}
+
+	return 0;
+}
+
+bool dsa_folded_mdb_port_is_router(const struct dsa_port *dp)
+{
+	struct dsa_port *rp;
+
+	if (!dp->bridge)
+		return false;
+
+	list_for_each_entry(rp, &dp->bridge->folded_mdb.routers, mrouter) {
+		if (rp == dp)
+			return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(dsa_folded_mdb_port_is_router);
+
+static bool dsa_folded_mdb_should_track(const struct dsa_port *dp,
+					const struct switchdev_obj_port_mdb *mdb)
+{
+	if (!dp->ds->fold_mrouters_into_mdb)
+		/* Driver manages multicast router ports without our
+		 * involvement.
+		 */
+		return false;
+
+	if (!ether_addr_is_ip_mcast(mdb->addr))
+		/* No need to track L2 multicast groups, as they are
+		 * not eligable for inclusion of router ports.
+		 */
+		return false;
+
+	return true;
+}
+
+static int dsa_folded_mdb_add_member(const struct dsa_port *dp,
+				     struct dsa_bridge *dbr,
+				     const struct switchdev_obj_port_mdb *mdb)
+{
+	struct dsa_db db = {
+		.type = DSA_DB_PORT,
+		.bridge = *dbr,
+	};
+	struct dsa_folded_mdb *fmdb;
+	struct dsa_mac_addr *a;
+	int err = 0;
+
+	if (!dsa_folded_mdb_should_track(dp, mdb))
+		return 0;
+
+	mutex_lock(&dbr->folded_mdb.lock);
+
+	a = dsa_mac_addr_find(&dbr->folded_mdb.mdbs, mdb->addr, mdb->vid, db);
+	if (a) {
+		fmdb = container_of(a, struct dsa_folded_mdb, addr);
+		dsa_portmap_set(fmdb->members, dp);
+
+		/* This port was already marked as a router port,
+		 * which means it has already been added to the
+		 * hardware MDB, no need to bother the driver again.
+		 */
+		if (dsa_folded_mdb_port_is_router(dp))
+			err = -EEXIST;
+	} else {
+
+		fmdb = kzalloc(sizeof(*fmdb), GFP_KERNEL);
+		if (!fmdb) {
+			err = -ENOMEM;
+			goto out;
+		}
+
+		ether_addr_copy(fmdb->addr.addr, mdb->addr);
+		fmdb->addr.vid = mdb->vid;
+		fmdb->addr.db = db;
+		dsa_portmap_set(fmdb->members, dp);
+		list_add_tail(&fmdb->addr.list, &dbr->folded_mdb.mdbs);
+
+		/* Make sure that all existing router ports will still
+		 * receive this group, now that it is registered.
+		 */
+		err = dsa_folded_mdb_notify_routers(dp, true, dbr, mdb);
+	}
+out:
+	mutex_unlock(&dbr->folded_mdb.lock);
+	return err;
+}
+
+static int dsa_folded_mdb_del_member(const struct dsa_port *dp,
+				     struct dsa_bridge *dbr,
+				     const struct switchdev_obj_port_mdb *mdb)
+{
+	struct dsa_db db = {
+		.type = DSA_DB_PORT,
+		.bridge = *dbr,
+	};
+	struct dsa_folded_mdb *fmdb;
+	struct dsa_mac_addr *a;
+	int err = 0;
+
+	if (!dsa_folded_mdb_should_track(dp, mdb))
+		return 0;
+
+	mutex_lock(&dbr->folded_mdb.lock);
+
+	a = dsa_mac_addr_find(&dbr->folded_mdb.mdbs, mdb->addr, mdb->vid, db);
+	if (!a) {
+		err = -ENOENT;
+		goto out;
+	}
+
+	fmdb = container_of(a, struct dsa_folded_mdb, addr);
+	dsa_portmap_clear(fmdb->members, dp);
+
+	if (dsa_portmap_weight(fmdb->members)) {
+		/* While this port is no longer a member of this
+		 * group, it is also marked as a router port, which
+		 * means that it should stay in the hardware MDB as
+		 * long as other members remain.
+		 */
+		if (dsa_folded_mdb_port_is_router(dp))
+			err = -EEXIST;
+	} else {
+		/* This was the last member in the group, remove any
+		 * lingering router ports to let the hardware flood it
+		 * as unregistered multicast.
+		 */
+		err = dsa_folded_mdb_notify_routers(dp, false, dbr, mdb);
+
+		list_del(&a->list);
+		kfree(fmdb);
+	}
+out:
+	mutex_unlock(&dbr->folded_mdb.lock);
+	return err;
+}
+
+static int dsa_folded_mdb_add_router(struct dsa_port *dp)
+{
+	struct net_device *port_dev = dsa_port_to_bridge_port(dp);
+	struct switchdev_obj_port_mdb mdb = {
+		.obj = {
+			.id = SWITCHDEV_OBJ_ID_PORT_MDB,
+			.orig_dev = port_dev,
+		},
+	};
+	struct dsa_bridge *dbr = dp->bridge;
+	struct dsa_folded_mdb *fmdb;
+	struct dsa_mac_addr *a;
+	int err = 0;
+
+	if (!dp->ds->fold_mrouters_into_mdb)
+		return 0;
+
+	mutex_lock(&dbr->folded_mdb.lock);
+
+	list_add_tail(&dp->mrouter, &dbr->folded_mdb.routers);
+
+	list_for_each_entry(a, &dbr->folded_mdb.mdbs, list) {
+		fmdb = container_of(a, struct dsa_folded_mdb, addr);
+
+		if (dsa_portmap_test(fmdb->members, dp))
+			continue;
+
+		memcpy(mdb.addr, a->addr, sizeof(mdb.addr));
+		mdb.vid = a->vid;
+
+		err = dsa_port_mdb_notify(dp, DSA_NOTIFIER_MDB_ADD, &mdb);
+		if (err)
+			break;
+	}
+
+	mutex_unlock(&dbr->folded_mdb.lock);
+	return err;
+}
+
+static int dsa_folded_mdb_del_router(struct dsa_port *dp)
+{
+	struct net_device *port_dev = dsa_port_to_bridge_port(dp);
+	struct switchdev_obj_port_mdb mdb = {
+		.obj = {
+			.id = SWITCHDEV_OBJ_ID_PORT_MDB,
+			.orig_dev = port_dev,
+		},
+	};
+	struct dsa_bridge *dbr = dp->bridge;
+	struct dsa_folded_mdb *fmdb;
+	struct dsa_mac_addr *a;
+	int err = 0;
+
+	if (!dp->ds->fold_mrouters_into_mdb)
+		return 0;
+
+	mutex_lock(&dbr->folded_mdb.lock);
+
+	list_del(&dp->mrouter);
+
+	list_for_each_entry(a, &dbr->folded_mdb.mdbs, list) {
+		fmdb = container_of(a, struct dsa_folded_mdb, addr);
+
+		if (dsa_portmap_test(fmdb->members, dp))
+			continue;
+
+		memcpy(mdb.addr, a->addr, sizeof(mdb.addr));
+		mdb.vid = a->vid;
+
+		err = dsa_port_mdb_notify(dp, DSA_NOTIFIER_MDB_DEL, &mdb);
+		if (err)
+			break;
+	}
+
+	mutex_unlock(&dbr->folded_mdb.lock);
+	return err;
+}
+
+static int dsa_folded_mdb_host_set_router(struct dsa_port *dp, bool enable)
+{
+	struct switchdev_obj_port_mdb mdb = {
+		.obj = {
+			.id = SWITCHDEV_OBJ_ID_PORT_MDB,
+		},
+	};
+	struct dsa_bridge *dbr = dp->bridge;
+	struct dsa_folded_mdb *fmdb;
+	struct dsa_mac_addr *a;
+	int err = 0;
+
+	mdb.obj.orig_dev = dbr->dev;
+
+	if (!dp->ds->fold_mrouters_into_mdb)
+		return 0;
+
+	mutex_lock(&dbr->folded_mdb.lock);
+
+	if (dbr->folded_mdb.host_mrouter == enable)
+		goto out_unlock;
+
+	dbr->folded_mdb.host_mrouter = enable;
+
+	list_for_each_entry(a, &dbr->folded_mdb.mdbs, list) {
+		fmdb = container_of(a, struct dsa_folded_mdb, addr);
+
+		memcpy(mdb.addr, a->addr, sizeof(mdb.addr));
+		mdb.vid = a->vid;
+
+		err = dsa_host_mdb_notify(dp->ds->dst, enable, dbr, &mdb);
+		if (err)
+			break;
+	}
+
+out_unlock:
+	mutex_unlock(&dbr->folded_mdb.lock);
+	return err;
+}
+
+static int dsa_port_mdb_notify(const struct dsa_port *dp, unsigned long e,
+			       const struct switchdev_obj_port_mdb *mdb)
 {
 	struct dsa_notifier_mdb_info info = {
 		.dp = dp,
@@ -1181,25 +1530,51 @@ int dsa_port_mdb_add(const struct dsa_port *dp,
 	if (!dp->ds->fdb_isolation)
 		info.db.bridge.num = 0;
 
-	return dsa_port_notify(dp, DSA_NOTIFIER_MDB_ADD, &info);
+	return dsa_port_notify(dp, e, &info);
+}
+
+int dsa_port_mdb_add(const struct dsa_port *dp,
+		     const struct switchdev_obj_port_mdb *mdb)
+{
+	int err;
+
+	err = dsa_folded_mdb_add_member(dp, dp->bridge, mdb);
+	switch (err) {
+	case 0:
+		break;
+	case -EEXIST:
+		return 0;
+	default:
+		return err;
+	}
+
+	err = dsa_port_mdb_notify(dp, DSA_NOTIFIER_MDB_ADD, mdb);
+	if (err)
+		dsa_folded_mdb_del_member(dp, dp->bridge, mdb);
+
+	return err;
 }
 
 int dsa_port_mdb_del(const struct dsa_port *dp,
 		     const struct switchdev_obj_port_mdb *mdb)
 {
-	struct dsa_notifier_mdb_info info = {
-		.dp = dp,
-		.mdb = mdb,
-		.db = {
-			.type = DSA_DB_BRIDGE,
-			.bridge = *dp->bridge,
-		},
-	};
+	int err;
 
-	if (!dp->ds->fdb_isolation)
-		info.db.bridge.num = 0;
+	err = dsa_folded_mdb_del_member(dp, dp->bridge, mdb);
+	switch (err) {
+	case 0:
+		break;
+	case -EEXIST:
+		return 0;
+	default:
+		return err;
+	}
 
-	return dsa_port_notify(dp, DSA_NOTIFIER_MDB_DEL, &info);
+	err = dsa_port_mdb_notify(dp, DSA_NOTIFIER_MDB_DEL, mdb);
+	if (err)
+		dsa_folded_mdb_add_member(dp, dp->bridge, mdb);
+
+	return err;
 }
 
 static int dsa_port_host_mdb_add(const struct dsa_port *dp,
@@ -1242,6 +1617,15 @@ int dsa_port_bridge_host_mdb_add(const struct dsa_port *dp,
 	err = dev_mc_add(conduit, mdb->addr);
 	if (err)
 		return err;
+
+	err = dsa_folded_mdb_add_member(dp->cpu_dp, dp->bridge, mdb);
+	switch (err) {
+	case 0:
+	case -EEXIST:
+		break;
+	default:
+		return err;
+	}
 
 	return dsa_port_host_mdb_add(dp, mdb, db);
 }
@@ -1287,6 +1671,16 @@ int dsa_port_bridge_host_mdb_del(const struct dsa_port *dp,
 	if (err)
 		return err;
 
+	err = dsa_folded_mdb_del_member(dp->cpu_dp, dp->bridge, mdb);
+	switch (err) {
+	case 0:
+	case -EEXIST:
+	case -ENOENT:
+		break;
+	default:
+		return err;
+	}
+
 	return dsa_port_host_mdb_del(dp, mdb, db);
 }
 
@@ -1294,11 +1688,37 @@ int dsa_port_mrouter_set(struct dsa_port *dp, bool mrouter,
 			 struct netlink_ext_ack *extack)
 {
 	struct dsa_switch *ds = dp->ds;
+	int err;
 
 	if (!ds->ops->port_mrouter_set)
 		return -EOPNOTSUPP;
 
-	return ds->ops->port_mrouter_set(ds, dp->index, mrouter, extack);
+	if (dsa_folded_mdb_port_is_router(dp) == mrouter)
+		return 0;
+
+	if (mrouter)
+		err = dsa_folded_mdb_add_router(dp);
+	else
+		err = dsa_folded_mdb_del_router(dp);
+
+	if (err)
+		return err;
+
+	err = ds->ops->port_mrouter_set(ds, dp->index, mrouter, extack);
+	if (err) {
+		if (mrouter)
+			dsa_folded_mdb_del_router(dp);
+		else
+			dsa_folded_mdb_add_router(dp);
+	}
+
+	return err;
+}
+
+int dsa_host_mrouter_set(struct dsa_port *dp, bool mrouter,
+			 struct netlink_ext_ack *extack)
+{
+	return dsa_folded_mdb_host_set_router(dp, mrouter);
 }
 
 int dsa_port_vlan_add(struct dsa_port *dp,
