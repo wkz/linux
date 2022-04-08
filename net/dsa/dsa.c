@@ -50,6 +50,34 @@ void dsa_flush_workqueue(void)
 }
 EXPORT_SYMBOL_GPL(dsa_flush_workqueue);
 
+static unsigned int dsa_portmap_bit(const struct dsa_port *dp)
+{
+	struct dsa_switch *ds = dp->ds;
+	struct dsa_switch_tree *dst = ds->dst;
+
+	return ds->index * dst->max_switch_ports + dp->index;
+}
+
+int dsa_portmap_weight(unsigned long *dpmap)
+{
+	return bitmap_weight(dpmap, DSA_PORTMAP_NBITS);
+}
+
+bool dsa_portmap_test(unsigned long *dpmap, const struct dsa_port *dp)
+{
+	return test_bit(dsa_portmap_bit(dp), dpmap);
+}
+
+void dsa_portmap_clear(unsigned long *dpmap, const struct dsa_port *dp)
+{
+	clear_bit(dsa_portmap_bit(dp), dpmap);
+}
+
+void dsa_portmap_set(unsigned long *dpmap, const struct dsa_port *dp)
+{
+	__set_bit(dsa_portmap_bit(dp), dpmap);
+}
+
 /**
  * dsa_lag_map() - Map LAG structure to a linear LAG array
  * @dst: Tree in which to record the mapping.
@@ -1532,6 +1560,9 @@ static int dsa_switch_probe(struct dsa_switch *ds)
 		dsa_switch_release_ports(ds);
 		dsa_tree_put(dst);
 	}
+
+	if (ds->num_ports > dst->max_switch_ports)
+		dst->max_switch_ports = ds->num_ports;
 
 	return err;
 }

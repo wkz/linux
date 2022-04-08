@@ -162,6 +162,9 @@ struct dsa_switch_tree {
 
 	/* Track the largest switch index within a tree */
 	unsigned int last_switch;
+
+	/* Track the maximum number of ports in a single switch */
+	unsigned int max_switch_ports;
 };
 
 /* LAG IDs are one-based, the dst->lags array is zero-based */
@@ -337,6 +340,17 @@ struct dsa_link {
 	struct dsa_port *link_dp;
 	struct list_head list;
 };
+
+/* The actual value is known at runtime, but a fixed (ridiculously)
+ * large number at build-time makes things a lot simpler.
+ */
+#define DSA_PORTMAP_NBITS 256
+#define DECLARE_DSA_PORTMAP(_name) DECLARE_BITMAP(_name, DSA_PORTMAP_NBITS)
+
+int dsa_portmap_weight(unsigned long *dpmap);
+bool dsa_portmap_test(unsigned long *dpmap, const struct dsa_port *dp);
+void dsa_portmap_clear(unsigned long *dpmap, const struct dsa_port *dp);
+void dsa_portmap_set(unsigned long *dpmap, const struct dsa_port *dp);
 
 enum dsa_db_type {
 	DSA_DB_PORT,
