@@ -609,10 +609,16 @@ static int fwnode_get_mac_addr(struct fwnode_handle *fwnode,
  */
 int fwnode_get_mac_address(struct fwnode_handle *fwnode, char *addr)
 {
+	struct device_node *np;
+
 	if (!fwnode_get_mac_addr(fwnode, "mac-address", addr) ||
 	    !fwnode_get_mac_addr(fwnode, "local-mac-address", addr) ||
 	    !fwnode_get_mac_addr(fwnode, "address", addr))
 		return 0;
+
+	np = to_of_node(fwnode);
+	if (np)
+		return of_get_mac_address_nvmem(np, addr);
 
 	return -ENOENT;
 }
