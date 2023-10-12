@@ -419,6 +419,8 @@ struct kszphy_ptp_priv {
 	 */
 	s8 event_a_pin;
 	s8 event_b_pin;
+
+	u32 ptp_clock_freq;
 };
 
 struct kszphy_priv {
@@ -4155,9 +4157,15 @@ static int lan8814_get_sqi_max(struct phy_device *phydev)
 #define LAN8841_PTP_RX_MODE			381
 #define LAN8841_PTP_INSERT_TS_EN		BIT(0)
 #define LAN8841_PTP_INSERT_TS_32BIT		BIT(1)
+#define LAN8841_PTP_REF_CLK_CFG			258
+#define LAN8841_PTP_REF_CLK_SOURCE		GENMASK(15,13)
+#define LAN8841_PTP_REF_CLK_SOURCE_EXTERNAL	(4 << 13)
+#define LAN8841_PTP_REF_CLK_CFG_PERIOD		GENMASK(8,0)
 
 static int lan8841_config_init(struct phy_device *phydev)
 {
+	struct kszphy_priv *priv = phydev->priv;
+	struct kszphy_ptp_priv *ptp_priv = &priv->ptp_priv;
 	int ret;
 
 	ret = ksz9131_config_init(phydev);
@@ -4169,6 +4177,14 @@ static int lan8841_config_init(struct phy_device *phydev)
 		       LAN8841_PTP_CMD_CTL,
 		       LAN8841_PTP_CMD_CTL_PTP_RESET,
 		       LAN8841_PTP_CMD_CTL_PTP_RESET);
+
+	if (ptp_priv->ptp_clock_freq)
+		phy_modify_mmd(phydev, KSZ9131RN_MMD_COMMON_CTRL_REG,
+			       LAN8841_PTP_REF_CLK_CFG,
+			       LAN8841_PTP_REF_CLK_SOURCE |
+			       LAN8841_PTP_REF_CLK_CFG_PERIOD,
+			       LAN8841_PTP_REF_CLK_SOURCE_EXTERNAL |
+			       NSEC_PER_SEC / ptp_priv->ptp_clock_freq);
 
 	phy_modify_mmd(phydev, KSZ9131RN_MMD_COMMON_CTRL_REG,
 		       LAN8841_PTP_CMD_CTL,
@@ -5367,6 +5383,11 @@ static int lan8841_probe(struct phy_device *phydev)
 
 	priv = phydev->priv;
 	ptp_priv = &priv->ptp_priv;
+
+	if (of_property_read_u32(phydev->mdio.dev.of_node,
+				 "microchip,1588-clock-freq",
+				 &ptp_priv->ptp_clock_freq))
+		ptp_priv->ptp_clock_freq = 0;
 
 	ptp_priv->pin_config = devm_kcalloc(&phydev->mdio.dev,
 					    LAN8841_PTP_GPIO_NUM,
