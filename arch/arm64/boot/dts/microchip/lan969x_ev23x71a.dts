@@ -174,12 +174,6 @@
 		pinctrl-names = "default";
 		cs-gpios = <&gpio 63 GPIO_ACTIVE_LOW>;
 		status = "okay";
-
-		spi@0 {
-			compatible = "mchp,synce_dpll";
-			reg = <0>;
-			spi-max-frequency = <8000000>;
-		};
 	};
 };
 
