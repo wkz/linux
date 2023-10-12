@@ -292,6 +292,8 @@ rsmu-spi-objs			:= rsmu_core.o rsmu_spi.o
 obj-$(CONFIG_MFD_RSMU_I2C)	+= rsmu-i2c.o
 obj-$(CONFIG_MFD_RSMU_SPI)	+= rsmu-spi.o
 
+obj-$(CONFIG_MFD_MICROCHIP_DPLL_SPI) += microchip-dpll-spi.o
+
 lan966x-pci-of-objs			:= lan966x_pci_of.o lan966x_pci_irq.o
 lan966x-pci-of-objs			+= lan966x_pci.dtb.o
 
