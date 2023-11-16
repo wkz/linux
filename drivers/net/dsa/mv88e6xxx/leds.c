@@ -12,6 +12,44 @@ struct mv88e6xxx_led {
 	struct led_classdev ldev;
 };
 
+static int mv88e6393x_led_brightness_set_blocking(struct mv88e6xxx_led *led,
+						  enum led_brightness brightness)
+{
+	return -EOPNOTSUPP;
+}
+static int mv88e6393x_led_blink_set(struct mv88e6xxx_led *led,
+				    unsigned long *delay_on,
+				    unsigned long *delay_off)
+{
+	return -EOPNOTSUPP;
+}
+
+static int mv88e6393x_led_hw_control_is_supported(struct mv88e6xxx_led *led,
+						  unsigned long flags)
+{
+	return -EOPNOTSUPP;
+}
+
+static int mv88e6393x_led_hw_control_set(struct mv88e6xxx_led *led,
+					 unsigned long flags)
+{
+	return -EOPNOTSUPP;
+}
+
+static int mv88e6393x_led_hw_control_get(struct mv88e6xxx_led *led,
+					 unsigned long *flags)
+{
+	return -EOPNOTSUPP;
+}
+
+const struct mv88e6xxx_led_ops mv88e6393x_led_ops = {
+	.brightness_set_blocking = mv88e6393x_led_brightness_set_blocking,
+	.blink_set = mv88e6393x_led_blink_set,
+	.hw_control_is_supported = mv88e6393x_led_hw_control_is_supported,
+	.hw_control_set = mv88e6393x_led_hw_control_set,
+	.hw_control_get = mv88e6393x_led_hw_control_get,
+};
+
 static int mv88e6xxx_led_brightness_set_blocking(struct led_classdev *ldev,
 						  enum led_brightness brightness)
 {
