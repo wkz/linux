@@ -205,6 +205,7 @@ struct mv88e6xxx_irq_ops;
 struct mv88e6xxx_gpio_ops;
 struct mv88e6xxx_avb_ops;
 struct mv88e6xxx_ptp_ops;
+struct mv88e6xxx_led_ops;
 
 struct mv88e6xxx_irq {
 	u16 masked;
@@ -328,6 +329,8 @@ struct mv88e6xxx_hw_stat {
 	int reg;
 	int type;
 };
+
+struct mv88e6xxx_led;
 
 struct mv88e6xxx_chip {
 	const struct mv88e6xxx_info *info;
@@ -672,6 +675,9 @@ struct mv88e6xxx_ops {
 	/* Precision Time Protocol operations */
 	const struct mv88e6xxx_ptp_ops *ptp_ops;
 
+	/* LED operations */
+	const struct mv88e6xxx_led_ops *led_ops;
+
 	/* Phylink */
 	void (*phylink_get_caps)(struct mv88e6xxx_chip *chip, int port,
 				 struct phylink_config *config);
@@ -746,6 +752,17 @@ struct mv88e6xxx_ptp_ops {
 	u32 cc_mult;
 	u32 cc_mult_num;
 	u32 cc_mult_dem;
+};
+
+struct mv88e6xxx_led_ops {
+	int (*brightness_set_blocking)(struct mv88e6xxx_led *led,
+				       enum led_brightness brightness);
+	int (*blink_set)(struct mv88e6xxx_led *led,
+			 unsigned long *delay_on, unsigned long *delay_off);
+	int (*hw_control_is_supported)(struct mv88e6xxx_led *led,
+				       unsigned long flags);
+	int (*hw_control_set)(struct mv88e6xxx_led *led, unsigned long flags);
+	int (*hw_control_get)(struct mv88e6xxx_led *led, unsigned long *flags);
 };
 
 static inline bool mv88e6xxx_has_stu(struct mv88e6xxx_chip *chip)

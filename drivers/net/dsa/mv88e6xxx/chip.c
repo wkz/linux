@@ -37,6 +37,7 @@
 #include "global1.h"
 #include "global2.h"
 #include "hwtstamp.h"
+#include "leds.h"
 #include "phy.h"
 #include "port.h"
 #include "ptp.h"
@@ -4257,11 +4258,16 @@ out_mdios:
 
 static int mv88e6xxx_port_setup(struct dsa_switch *ds, int port)
 {
-	return mv88e6xxx_setup_devlink_regions_port(ds, port);
+	int err = 0;
+
+	err = err ? : mv88e6xxx_setup_devlink_regions_port(ds, port);
+	err = err ? : mv88e6xxx_port_setup_leds(ds, port);
+	return err;
 }
 
 static void mv88e6xxx_port_teardown(struct dsa_switch *ds, int port)
 {
+	/* LED resources are devm_ managed */
 	mv88e6xxx_teardown_devlink_regions_port(ds, port);
 }
 
