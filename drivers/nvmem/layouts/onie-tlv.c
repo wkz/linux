@@ -196,7 +196,7 @@ static int onie_tlv_parse_table(struct device *dev, struct nvmem_device *nvmem,
 
 	if (!onie_tlv_hdr_is_valid(dev, &hdr)) {
 		dev_err(dev, "Invalid ONIE TLV header\n");
-		return -EINVAL;
+		return 0;
 	}
 
 	hdr_len = sizeof(hdr.id) + sizeof(hdr.version) + sizeof(hdr.data_len);
@@ -204,7 +204,7 @@ static int onie_tlv_parse_table(struct device *dev, struct nvmem_device *nvmem,
 	table_len = hdr_len + data_len;
 	if (table_len > ONIE_TLV_MAX_LEN) {
 		dev_err(dev, "Invalid ONIE TLV data length\n");
-		return -EINVAL;
+		return 0;
 	}
 
 	table = devm_kmalloc(dev, table_len, GFP_KERNEL);
@@ -216,7 +216,7 @@ static int onie_tlv_parse_table(struct device *dev, struct nvmem_device *nvmem,
 		return ret;
 
 	if (!onie_tlv_crc_is_valid(dev, table_len, table))
-		return -EINVAL;
+		return 0;
 
 	data = table + hdr_len;
 	ret = onie_tlv_add_cells(dev, nvmem, data_len, data);
