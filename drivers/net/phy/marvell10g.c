@@ -184,6 +184,9 @@ struct mv3310_chip {
 struct mv3310_led {
 	u8 index;
 	u16 ctrl;
+
+	unsigned copper:1;
+	unsigned fiber:1;
 };
 
 struct mv3310_priv {
@@ -308,7 +311,12 @@ static int mv3310_led_funcs_from_flags(struct mv3310_led *led,
 
 	if (solid) {
 		if (link) {
-			*solid = MV3310_LED_FUNC_LINK;
+			if (led->copper)
+				*solid = MV3310_LED_FUNC_LINK_COPPER;
+			else if (led->fiber)
+				*solid = MV3310_LED_FUNC_LINK_FIBER;
+			else
+				*solid = MV3310_LED_FUNC_LINK;
 		} else if (duplex) {
 			switch (duplex) {
 			case BIT(TRIGGER_NETDEV_HALF_DUPLEX):
@@ -538,6 +546,9 @@ static int mv3310_led_hw_control_get(struct phy_device *phydev, u8 index,
 static int mv3310_led_probe_of(struct phy_device *phydev,
 			       struct device_node *np)
 {
+	struct mv3310_priv *priv = dev_get_drvdata(&phydev->mdio.dev);
+	struct mv3310_led *led;
+	const char *media;
 	u32 index;
 	int err;
 
@@ -547,6 +558,16 @@ static int mv3310_led_probe_of(struct phy_device *phydev,
 
 	if (index >= MV3310_N_LEDS)
 		return -EINVAL;
+
+	led = &priv->led[index];
+
+	err = of_property_read_string(np, "marvell,media", &media);
+	if (!err) {
+		if (!strcmp(media, "copper"))
+			led->copper = 1;
+		else if (!strcmp(media, "fiber"))
+			led->fiber = 1;
+	}
 
 	/* mv3310_led_polarity_set() will not be called unless the
 	 * device tree specifies a mode that of_phy_led() considers to
