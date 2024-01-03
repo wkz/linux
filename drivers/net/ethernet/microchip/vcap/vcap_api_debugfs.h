@@ -38,4 +38,9 @@ static inline struct dentry *vcap_debugfs(struct device *dev,
 }
 
 #endif
+
+void vcap_show_admin_info(struct vcap_control *vctrl,
+			  struct vcap_admin *admin,
+			  struct vcap_output_print *out);
+
 #endif /* __VCAP_API_DEBUGFS__ */

@@ -1490,9 +1490,7 @@ static void vcap_api_set_rule_counter_test(struct kunit *test)
 	list_add_tail(&ri.list, &is2_admin.rules);
 	list_add_tail(&ri2.list, &is2_admin.rules);
 
-	pr_info("%s:%d\n", __func__, __LINE__);
 	ret = vcap_rule_set_counter(&ri.data, &ctr);
-	pr_info("%s:%d\n", __func__, __LINE__);
 	KUNIT_EXPECT_EQ(test, 0, ret);
 
 	KUNIT_EXPECT_EQ(test, 1002, test_hw_counter_id);

@@ -263,9 +263,9 @@ static void vcap_show_admin_rule(struct vcap_control *vctrl,
 	vcap_debugfs_show_rule_actionset(ri, out);
 }
 
-static void vcap_show_admin_info(struct vcap_control *vctrl,
-				 struct vcap_admin *admin,
-				 struct vcap_output_print *out)
+void vcap_show_admin_info(struct vcap_control *vctrl,
+			  struct vcap_admin *admin,
+			  struct vcap_output_print *out)
 {
 	const struct vcap_info *vcap = &vctrl->vcaps[admin->vtype];
 
@@ -300,7 +300,7 @@ static int vcap_show_admin(struct vcap_control *vctrl,
 	vcap_show_admin_info(vctrl, admin, out);
 	list_for_each_entry(elem, &admin->rules, list) {
 		vrule = vcap_decode_rule(elem);
-		if (IS_ERR_OR_NULL(vrule)) {
+		if (IS_ERR(vrule)) {
 			ret = PTR_ERR(vrule);
 			break;
 		}
