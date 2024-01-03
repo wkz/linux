@@ -14,6 +14,9 @@
 
 #include "lan966x_main.h"
 
+#include "lan966x_mrp.h"
+#include "lan966x_cfm.h"
+
 #define XTR_EOF_0			0x00000080U
 #define XTR_EOF_1			0x01000080U
 #define XTR_EOF_2			0x02000080U
@@ -48,6 +51,7 @@ static const struct lan966x_main_io_resource lan966x_main_iomap[] =  {
 	{ TARGET_CHIP_TOP,              0x10000, 1 }, /* 0xe2010000 */
 	{ TARGET_REW,                   0x14000, 1 }, /* 0xe2014000 */
 	{ TARGET_VCAP,                  0x18000, 1 }, /* 0xe2018000 */
+	{ TARGET_MEP,                   0x1c000, 1 }, /* 0xe201c000 */
 	{ TARGET_VCAP + 1,              0x20000, 1 }, /* 0xe2020000 */
 	{ TARGET_VCAP + 2,              0x24000, 1 }, /* 0xe2024000 */
 	{ TARGET_SYS,                   0x28000, 1 }, /* 0xe2028000 */
@@ -348,21 +352,57 @@ static void lan966x_ifh_set_vid(void *ifh, u64 vid)
 	lan966x_ifh_set(ifh, vid, IFH_POS_TCI, IFH_WID_TCI);
 }
 
-static void lan966x_ifh_set_rew_op(void *ifh, u64 rew_op)
+void lan966x_ifh_set_rew_op(void *ifh, u64 rew_op)
 {
 	lan966x_ifh_set(ifh, rew_op, IFH_POS_REW_CMD, IFH_WID_REW_CMD);
 }
 
-static void lan966x_ifh_set_timestamp(void *ifh, u64 timestamp)
+void lan966x_ifh_set_timestamp(void *ifh, u64 timestamp)
 {
 	lan966x_ifh_set(ifh, timestamp, IFH_POS_TIMESTAMP, IFH_WID_TIMESTAMP);
+}
+
+void lan966x_ifh_set_afi(void *ifh, u64 afi)
+{
+	lan966x_ifh_set(ifh, afi, IFH_POS_AFI, IFH_WID_AFI);
+}
+
+void lan966x_ifh_set_rew_oam(void *ifh, u64 rew_oam)
+{
+	lan966x_ifh_set(ifh, rew_oam, IFH_POS_REW_OAM, IFH_WID_REW_OAM);
+}
+
+void lan966x_ifh_set_oam_type(void *ifh, u64 oam_type)
+{
+	lan966x_ifh_set(ifh, oam_type, IFH_POS_PDU_TYPE, IFH_WID_PDU_TYPE);
+}
+
+void lan966x_ifh_set_seq_num(void *ifh, u64 seq_num)
+{
+	lan966x_ifh_set(ifh, seq_num, IFH_POS_SEQ_NUM, IFH_WID_SEQ_NUM);
+}
+
+netdev_tx_t lan966x_xmit(struct lan966x_port *port,
+			 struct sk_buff *skb,
+			 __be32 ifh[IFH_LEN])
+{
+	struct lan966x *lan966x = port->lan966x;
+	int err;
+
+	spin_lock(&lan966x->tx_lock);
+	if (port->lan966x->fdma)
+		err = lan966x_fdma_xmit(skb, ifh, port->dev);
+	else
+		err = lan966x_port_ifh_xmit(skb, ifh, port->dev);
+	spin_unlock(&lan966x->tx_lock);
+
+	return err;
 }
 
 static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 				     struct net_device *dev)
 {
 	struct lan966x_port *port = netdev_priv(dev);
-	struct lan966x *lan966x = port->lan966x;
 	__be32 ifh[IFH_LEN];
 	int err;
 
@@ -383,14 +423,7 @@ static netdev_tx_t lan966x_port_xmit(struct sk_buff *skb,
 		lan966x_ifh_set_timestamp(ifh, LAN966X_SKB_CB(skb)->ts_id);
 	}
 
-	spin_lock(&lan966x->tx_lock);
-	if (port->lan966x->fdma)
-		err = lan966x_fdma_xmit(skb, ifh, dev);
-	else
-		err = lan966x_port_ifh_xmit(skb, ifh, dev);
-	spin_unlock(&lan966x->tx_lock);
-
-	return err;
+	return lan966x_xmit(port, skb, ifh);
 }
 
 static int lan966x_port_change_mtu(struct net_device *dev, int new_mtu)
@@ -734,7 +767,12 @@ static irqreturn_t lan966x_ana_irq_handler(int irq, void *args)
 {
 	struct lan966x *lan966x = args;
 
-	return lan966x_mac_irq_handler(lan966x);
+	lan966x_mac_irq_handler(lan966x);
+	lan966x_mrp_ring_open(lan966x);
+	lan966x_mrp_in_open(lan966x);
+	lan966x_handle_cfm_interrupt(lan966x);
+
+	return IRQ_HANDLED;
 }
 
 static void lan966x_cleanup_ports(struct lan966x *lan966x)
@@ -782,6 +820,46 @@ static void lan966x_cleanup_ports(struct lan966x *lan966x)
 
 	if (lan966x->ptp_ext_irq > 0)
 		devm_free_irq(lan966x->dev, lan966x->ptp_ext_irq, lan966x);
+}
+
+static int lan966x_port_parse_delays(struct lan966x_port *port,
+				     struct fwnode_handle *portnp)
+{
+	struct fwnode_handle *delay;
+	int err;
+
+	INIT_LIST_HEAD(&port->path_delays);
+
+	fwnode_for_each_available_child_node(portnp, delay) {
+		struct lan966x_path_delay *path_delay;
+		s32 tx_delay;
+		s32 rx_delay;
+		u32 speed;
+
+		err = fwnode_property_read_u32(delay, "speed", &speed);
+		if (err)
+			return err;
+
+		err = fwnode_property_read_u32(delay, "rx_delay", &rx_delay);
+		if (err)
+			return err;
+
+		err = fwnode_property_read_u32(delay, "tx_delay", &tx_delay);
+		if (err)
+			return err;
+
+		path_delay = devm_kzalloc(&port->dev->dev,
+					  sizeof(*path_delay), GFP_KERNEL);
+		if (!path_delay)
+			return -ENOMEM;
+
+		path_delay->rx_delay = rx_delay;
+		path_delay->tx_delay = tx_delay;
+		path_delay->speed = speed;
+		list_add_tail(&path_delay->list, &port->path_delays);
+	}
+
+	return 0;
 }
 
 static int lan966x_probe_port(struct lan966x *lan966x, u32 p,
@@ -866,6 +944,8 @@ static int lan966x_probe_port(struct lan966x *lan966x, u32 p,
 				    NETDEV_XDP_ACT_REDIRECT |
 				    NETDEV_XDP_ACT_NDO_XMIT;
 
+	INIT_LIST_HEAD(&port->tc.templates);
+
 	err = register_netdev(dev);
 	if (err) {
 		dev_err(lan966x->dev, "register_netdev failed\n");
@@ -875,6 +955,8 @@ static int lan966x_probe_port(struct lan966x *lan966x, u32 p,
 	lan966x_vlan_port_set_vlan_aware(port, 0);
 	lan966x_vlan_port_set_vid(port, HOST_PVID, false, false);
 	lan966x_vlan_port_apply(port);
+
+	lan966x_port_parse_delays(port, portnp);
 
 	return 0;
 }
@@ -1211,6 +1293,7 @@ static int lan966x_probe(struct platform_device *pdev)
 		lan966x->ports[p]->serdes = serdes;
 
 		lan966x_port_init(lan966x->ports[p]);
+		lan966x_qos_port_init(lan966x->ports[p]);
 		err = lan966x_xdp_port_init(lan966x->ports[p]);
 		if (err)
 			goto cleanup_ports;
@@ -1236,6 +1319,17 @@ static int lan966x_probe(struct platform_device *pdev)
 		goto cleanup_fdma;
 
 	lan966x_dcb_init(lan966x);
+
+	lan966x_qos_init(lan966x);
+	lan966x_pmac_init(lan966x);
+
+	lan966x_netlink_fp_init();
+	lan966x_netlink_frer_init(lan966x);
+	lan966x_netlink_qos_init(lan966x);
+	lan966x_netlink_pmac_init(lan966x);
+
+	lan966x_mrp_init(lan966x);
+	lan966x_cfm_init(lan966x);
 
 	return 0;
 
@@ -1264,6 +1358,16 @@ cleanup_ports:
 static int lan966x_remove(struct platform_device *pdev)
 {
 	struct lan966x *lan966x = platform_get_drvdata(pdev);
+
+	lan966x_cfm_uninit(lan966x);
+	lan966x_mrp_uninit(lan966x);
+
+	lan966x_netlink_frer_uninit();
+	lan966x_netlink_fp_uninit();
+	lan966x_netlink_qos_uninit();
+	lan966x_netlink_pmac_uninit();
+
+	lan966x_pmac_deinit(lan966x);
 
 	lan966x_taprio_deinit(lan966x);
 	lan966x_vcap_deinit(lan966x);
