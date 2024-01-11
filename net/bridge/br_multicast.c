@@ -1623,24 +1623,29 @@ static int br_ip6_multicast_add_group(struct net_bridge_mcast *brmctx,
 }
 #endif
 
-static bool br_multicast_rport_del(struct hlist_node *rlist)
+static bool br_multicast_rport_del(struct net_bridge_mcast_port *pmctx,
+				   struct hlist_node *rlist, u16 proto)
 {
 	if (hlist_unhashed(rlist))
 		return false;
 
 	hlist_del_init_rcu(rlist);
+
+	br_switchdev_mrouter_notify(pmctx->port->dev, false,
+				    pmctx->vlan ? pmctx->vlan->vid : 0,
+				    proto);
 	return true;
 }
 
 static bool br_ip4_multicast_rport_del(struct net_bridge_mcast_port *pmctx)
 {
-	return br_multicast_rport_del(&pmctx->ip4_rlist);
+	return br_multicast_rport_del(pmctx, &pmctx->ip4_rlist, ETH_P_IP);
 }
 
 static bool br_ip6_multicast_rport_del(struct net_bridge_mcast_port *pmctx)
 {
 #if IS_ENABLED(CONFIG_IPV6)
-	return br_multicast_rport_del(&pmctx->ip6_rlist);
+	return br_multicast_rport_del(pmctx, &pmctx->ip6_rlist, ETH_P_IPV6);
 #else
 	return false;
 #endif
@@ -1648,7 +1653,7 @@ static bool br_ip6_multicast_rport_del(struct net_bridge_mcast_port *pmctx)
 
 static void br_multicast_router_expired(struct net_bridge_mcast_port *pmctx,
 					struct timer_list *t,
-					struct hlist_node *rlist)
+					struct hlist_node *rlist, u16 proto)
 {
 	struct net_bridge *br = pmctx->port->br;
 	bool del;
@@ -1659,7 +1664,7 @@ static void br_multicast_router_expired(struct net_bridge_mcast_port *pmctx,
 	    timer_pending(t))
 		goto out;
 
-	del = br_multicast_rport_del(rlist);
+	del = br_multicast_rport_del(pmctx, rlist, proto);
 	br_multicast_rport_del_notify(pmctx, del);
 out:
 	spin_unlock(&br->multicast_lock);
@@ -1670,7 +1675,7 @@ static void br_ip4_multicast_router_expired(struct timer_list *t)
 	struct net_bridge_mcast_port *pmctx = from_timer(pmctx, t,
 							 ip4_mc_router_timer);
 
-	br_multicast_router_expired(pmctx, t, &pmctx->ip4_rlist);
+	br_multicast_router_expired(pmctx, t, &pmctx->ip4_rlist, ETH_P_IP);
 }
 
 #if IS_ENABLED(CONFIG_IPV6)
@@ -1679,7 +1684,7 @@ static void br_ip6_multicast_router_expired(struct timer_list *t)
 	struct net_bridge_mcast_port *pmctx = from_timer(pmctx, t,
 							 ip6_mc_router_timer);
 
-	br_multicast_router_expired(pmctx, t, &pmctx->ip6_rlist);
+	br_multicast_router_expired(pmctx, t, &pmctx->ip6_rlist, ETH_P_IPV6);
 }
 #endif
 
@@ -1697,12 +1702,19 @@ static void br_mc_router_state_change(struct net_bridge *p,
 }
 
 static void br_multicast_local_router_expired(struct net_bridge_mcast *brmctx,
-					      struct timer_list *timer)
+					      struct timer_list *timer,
+					      u16 proto)
 {
 	spin_lock(&brmctx->br->multicast_lock);
 	if (brmctx->multicast_router == MDB_RTR_TYPE_DISABLED ||
-	    brmctx->multicast_router == MDB_RTR_TYPE_PERM ||
-	    br_ip4_multicast_is_router(brmctx) ||
+	    brmctx->multicast_router == MDB_RTR_TYPE_PERM)
+		goto out;
+
+	br_switchdev_mrouter_notify(brmctx->br->dev, false,
+				    brmctx->vlan ? brmctx->vlan->vid : 0,
+				    proto);
+
+	if (br_ip4_multicast_is_router(brmctx) ||
 	    br_ip6_multicast_is_router(brmctx))
 		goto out;
 
@@ -1716,7 +1728,7 @@ static void br_ip4_multicast_local_router_expired(struct timer_list *t)
 	struct net_bridge_mcast *brmctx = from_timer(brmctx, t,
 						     ip4_mc_router_timer);
 
-	br_multicast_local_router_expired(brmctx, t);
+	br_multicast_local_router_expired(brmctx, t, ETH_P_IP);
 }
 
 #if IS_ENABLED(CONFIG_IPV6)
@@ -1725,7 +1737,7 @@ static void br_ip6_multicast_local_router_expired(struct timer_list *t)
 	struct net_bridge_mcast *brmctx = from_timer(brmctx, t,
 						     ip6_mc_router_timer);
 
-	br_multicast_local_router_expired(brmctx, t);
+	br_multicast_local_router_expired(brmctx, t, ETH_P_IPV6);
 }
 #endif
 
@@ -3281,7 +3293,8 @@ static bool br_multicast_no_router_otherpf(struct net_bridge_mcast_port *pmctx,
 static void br_multicast_add_router(struct net_bridge_mcast *brmctx,
 				    struct net_bridge_mcast_port *pmctx,
 				    struct hlist_node *rlist,
-				    struct hlist_head *mc_router_list)
+				    struct hlist_head *mc_router_list,
+				    u16 proto)
 {
 	struct hlist_node *slot;
 
@@ -3294,6 +3307,10 @@ static void br_multicast_add_router(struct net_bridge_mcast *brmctx,
 		hlist_add_behind_rcu(rlist, slot);
 	else
 		hlist_add_head_rcu(rlist, mc_router_list);
+
+	br_switchdev_mrouter_notify(pmctx->port->dev, true,
+				    pmctx->vlan ? pmctx->vlan->vid : 0,
+				    proto);
 
 	/* For backwards compatibility for now, only notify if we
 	 * switched from no IPv4/IPv6 multicast router to a new
@@ -3313,7 +3330,7 @@ static void br_ip4_multicast_add_router(struct net_bridge_mcast *brmctx,
 					struct net_bridge_mcast_port *pmctx)
 {
 	br_multicast_add_router(brmctx, pmctx, &pmctx->ip4_rlist,
-				&brmctx->ip4_mc_router_list);
+				&brmctx->ip4_mc_router_list, ETH_P_IP);
 }
 
 /* Add port to router_list
@@ -3325,7 +3342,7 @@ static void br_ip6_multicast_add_router(struct net_bridge_mcast *brmctx,
 {
 #if IS_ENABLED(CONFIG_IPV6)
 	br_multicast_add_router(brmctx, pmctx, &pmctx->ip6_rlist,
-				&brmctx->ip6_mc_router_list);
+				&brmctx->ip6_mc_router_list, ETH_P_IPV6);
 #endif
 }
 
@@ -3333,15 +3350,22 @@ static void br_multicast_mark_router(struct net_bridge_mcast *brmctx,
 				     struct net_bridge_mcast_port *pmctx,
 				     struct timer_list *timer,
 				     struct hlist_node *rlist,
-				     struct hlist_head *mc_router_list)
+				     struct hlist_head *mc_router_list,
+				     u16 proto)
 {
 	unsigned long now = jiffies;
+	u16 vid;
 
 	if (!br_multicast_ctx_should_use(brmctx, pmctx))
 		return;
 
 	if (!pmctx) {
 		if (brmctx->multicast_router == MDB_RTR_TYPE_TEMP_QUERY) {
+			if (!br_multicast_is_router(brmctx, htons(proto))) {
+				vid = brmctx->vlan ? brmctx->vlan->vid : 0;
+				br_switchdev_mrouter_notify(brmctx->br->dev, true,
+							    vid, proto);
+			}
 			if (!br_ip4_multicast_is_router(brmctx) &&
 			    !br_ip6_multicast_is_router(brmctx))
 				br_mc_router_state_change(brmctx->br, true);
@@ -3354,7 +3378,7 @@ static void br_multicast_mark_router(struct net_bridge_mcast *brmctx,
 	    pmctx->multicast_router == MDB_RTR_TYPE_PERM)
 		return;
 
-	br_multicast_add_router(brmctx, pmctx, rlist, mc_router_list);
+	br_multicast_add_router(brmctx, pmctx, rlist, mc_router_list, proto);
 	mod_timer(timer, now + brmctx->multicast_querier_interval);
 }
 
@@ -3370,7 +3394,7 @@ static void br_ip4_multicast_mark_router(struct net_bridge_mcast *brmctx,
 	}
 
 	br_multicast_mark_router(brmctx, pmctx, timer, rlist,
-				 &brmctx->ip4_mc_router_list);
+				 &brmctx->ip4_mc_router_list, ETH_P_IP);
 }
 
 static void br_ip6_multicast_mark_router(struct net_bridge_mcast *brmctx,
@@ -3386,7 +3410,7 @@ static void br_ip6_multicast_mark_router(struct net_bridge_mcast *brmctx,
 	}
 
 	br_multicast_mark_router(brmctx, pmctx, timer, rlist,
-				 &brmctx->ip6_mc_router_list);
+				 &brmctx->ip6_mc_router_list, ETH_P_IPV6);
 #endif
 }
 
@@ -4378,14 +4402,23 @@ void br_multicast_dev_del(struct net_bridge *br)
 
 int br_multicast_set_router(struct net_bridge_mcast *brmctx, unsigned long val)
 {
+	u16 vid = brmctx->vlan ? brmctx->vlan->vid : 0;
 	int err = -EINVAL;
+	bool on;
 
 	spin_lock_bh(&brmctx->br->multicast_lock);
 
 	switch (val) {
 	case MDB_RTR_TYPE_DISABLED:
 	case MDB_RTR_TYPE_PERM:
-		br_mc_router_state_change(brmctx->br, val == MDB_RTR_TYPE_PERM);
+		on = val == MDB_RTR_TYPE_PERM;
+		if (br_multicast_is_router(brmctx, htons(ETH_P_IP)) != on)
+			br_switchdev_mrouter_notify(brmctx->br->dev, on, vid,
+						    ETH_P_IP);
+		if (br_multicast_is_router(brmctx, htons(ETH_P_IPV6)) != on)
+			br_switchdev_mrouter_notify(brmctx->br->dev, on, vid,
+						    ETH_P_IPV6);
+		br_mc_router_state_change(brmctx->br, on);
 		del_timer(&brmctx->ip4_mc_router_timer);
 #if IS_ENABLED(CONFIG_IPV6)
 		del_timer(&brmctx->ip6_mc_router_timer);
@@ -4394,6 +4427,12 @@ int br_multicast_set_router(struct net_bridge_mcast *brmctx, unsigned long val)
 		err = 0;
 		break;
 	case MDB_RTR_TYPE_TEMP_QUERY:
+		if (brmctx->multicast_router == MDB_RTR_TYPE_PERM) {
+			br_switchdev_mrouter_notify(brmctx->br->dev, false, vid,
+						    ETH_P_IP);
+			br_switchdev_mrouter_notify(brmctx->br->dev, false, vid,
+						    ETH_P_IPV6);
+		}
 		if (brmctx->multicast_router != MDB_RTR_TYPE_TEMP_QUERY)
 			br_mc_router_state_change(brmctx->br, false);
 		brmctx->multicast_router = val;

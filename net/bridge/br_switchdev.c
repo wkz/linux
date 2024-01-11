@@ -668,6 +668,26 @@ void br_switchdev_mdb_notify(struct net_device *dev,
 		break;
 	}
 }
+
+void br_switchdev_mrouter_notify(struct net_device *dev,
+				 bool on, u16 vid, u16 proto)
+{
+	struct switchdev_obj_mrouter mr = {
+		.obj = {
+			.id = SWITCHDEV_OBJ_ID_MROUTER,
+			.flags = SWITCHDEV_F_DEFER,
+			.orig_dev = dev,
+		},
+		.vid = vid,
+		.proto = proto,
+	};
+
+	if (on)
+		switchdev_port_obj_add(dev, &mr.obj, NULL);
+	else
+		switchdev_port_obj_del(dev, &mr.obj);
+}
+
 #endif
 
 static int

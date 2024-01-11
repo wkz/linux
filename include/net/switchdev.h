@@ -88,6 +88,7 @@ struct switchdev_attr {
 	_fn(IN_TEST_MRP),		\
 	_fn(IN_ROLE_MRP),		\
 	_fn(IN_STATE_MRP),		\
+	_fn(MROUTER),			\
 	/*  */
 
 #define SWITCHDEV_OBJ_ID_ENUMERATOR(_id) \
@@ -214,6 +215,15 @@ struct switchdev_obj_in_state_mrp {
 
 #define SWITCHDEV_OBJ_IN_STATE_MRP(OBJ) \
 	container_of((OBJ), struct switchdev_obj_in_state_mrp, obj)
+
+struct switchdev_obj_mrouter {
+	struct switchdev_obj obj;
+	u16 vid;
+	u16 proto;
+};
+
+#define SWITCHDEV_OBJ_MROUTER(OBJ) \
+	container_of((OBJ), struct switchdev_obj_mrouter, obj)
 
 struct switchdev_brport {
 	struct net_device *dev;

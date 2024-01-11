@@ -119,6 +119,7 @@ ssize_t switchdev_obj_str(const struct switchdev_obj *obj,
 	};
 #undef _OBJ_ID_STRINGER
 
+	const struct switchdev_obj_mrouter *mrouter;
 	const struct switchdev_obj_port_vlan *vlan;
 	const struct switchdev_obj_port_mdb *mdb;
 	char *cur = buf;
@@ -150,6 +151,11 @@ ssize_t switchdev_obj_str(const struct switchdev_obj *obj,
 	case SWITCHDEV_OBJ_ID_HOST_MDB:
 		mdb = SWITCHDEV_OBJ_PORT_MDB(obj);
 		n = snprintf(cur, len, "vid %u addr %pM", mdb->vid, mdb->addr);
+		break;
+	case SWITCHDEV_OBJ_ID_MROUTER:
+		mrouter = SWITCHDEV_OBJ_MROUTER(obj);
+		n = snprintf(cur, len, "vid %u proto %#4x", mrouter->vid,
+			     mrouter->proto);
 		break;
 	default:
 		/* Trim trailing space */

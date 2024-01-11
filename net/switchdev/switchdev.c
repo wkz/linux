@@ -26,6 +26,7 @@ static bool switchdev_obj_eq(const struct switchdev_obj *a,
 			     const struct switchdev_obj *b)
 {
 	const struct switchdev_obj_port_vlan *va, *vb;
+	const struct switchdev_obj_mrouter *mra, *mrb;
 	const struct switchdev_obj_port_mdb *ma, *mb;
 
 	if (a->id != b->id || a->orig_dev != b->orig_dev)
@@ -44,6 +45,10 @@ static bool switchdev_obj_eq(const struct switchdev_obj *a,
 		mb = SWITCHDEV_OBJ_PORT_MDB(b);
 		return ma->vid == mb->vid &&
 			ether_addr_equal(ma->addr, mb->addr);
+	case SWITCHDEV_OBJ_ID_MROUTER:
+		mra = SWITCHDEV_OBJ_MROUTER(a);
+		mrb = SWITCHDEV_OBJ_MROUTER(b);
+		return mra->vid == mrb->vid && mra->proto == mrb->proto;
 	default:
 		break;
 	}
@@ -222,6 +227,8 @@ static size_t switchdev_obj_size(const struct switchdev_obj *obj)
 		return sizeof(struct switchdev_obj_port_mdb);
 	case SWITCHDEV_OBJ_ID_HOST_MDB:
 		return sizeof(struct switchdev_obj_port_mdb);
+	case SWITCHDEV_OBJ_ID_MROUTER:
+		return sizeof(struct switchdev_obj_mrouter);
 	default:
 		BUG();
 	}
