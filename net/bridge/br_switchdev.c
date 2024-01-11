@@ -649,6 +649,34 @@ void br_switchdev_mdb_notify(struct net_device *dev,
 		break;
 	}
 }
+
+void br_switchdev_mrouter_notify(struct net_device *dev,
+				 bool on, u16 vid, u16 proto)
+{
+	struct switchdev_notifier_mrouter_info mri = {
+		.info = {
+			.dev = dev,
+		},
+		.vid = vid,
+		.proto = proto,
+	};
+
+	if (on)
+		call_switchdev_notifiers(SWITCHDEV_MROUTER_ADD,
+					 dev, &mri.info, NULL);
+	else
+		call_switchdev_notifiers(SWITCHDEV_MROUTER_DEL,
+					 dev, &mri.info, NULL);
+}
+
+void br_switchdev_mrouter_notify_both(struct net_device *dev, bool on, u16 vid)
+{
+	br_switchdev_mrouter_notify(dev, on, vid, ETH_P_IP);
+#if IS_ENABLED(CONFIG_IPV6)
+	br_switchdev_mrouter_notify(dev, on, vid, ETH_P_IPV6);
+#endif
+}
+
 #endif
 
 static int
