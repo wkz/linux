@@ -915,6 +915,24 @@ ipv6_lladdr_get()
 		head -1
 }
 
+linkinfo_get()
+{
+	local if_name=$1; shift
+	local attr=$1; shift
+
+	ip -j -d link show dev $if_name \
+		| jq -r ".[][\"linkinfo\"][\"info_data\"][\"${attr}\"]"
+}
+
+linkinfo_upper_get()
+{
+	local if_name=$1; shift
+	local attr=$1; shift
+
+	ip -j -d link show dev $if_name \
+		| jq -r ".[][\"linkinfo\"][\"info_slave_data\"][\"${attr}\"]"
+}
+
 bridge_ageing_time_get()
 {
 	local bridge=$1
