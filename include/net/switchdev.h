@@ -233,6 +233,9 @@ struct switchdev_brport {
 	_fn(FDB_OFFLOADED),		\
 	_fn(FDB_FLUSH_TO_BRIDGE),	\
 					\
+	_fn(MROUTER_ADD),		\
+	_fn(MROUTER_DEL),		\
+					\
 	_fn(PORT_OBJ_ADD),		\
 	_fn(PORT_OBJ_DEL),		\
 	_fn(PORT_ATTR_SET),		\
@@ -272,6 +275,12 @@ struct switchdev_notifier_fdb_info {
 	   is_local:1,
 	   locked:1,
 	   offloaded:1;
+};
+
+struct switchdev_notifier_mrouter_info {
+	struct switchdev_notifier_info info; /* must be first */
+	u16 vid;
+	u16 proto;
 };
 
 struct switchdev_notifier_port_obj_info {

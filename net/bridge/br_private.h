@@ -2171,6 +2171,9 @@ void br_switchdev_mdb_notify(struct net_device *dev,
 			     struct net_bridge_mdb_entry *mp,
 			     struct net_bridge_port_group *pg,
 			     int type);
+void br_switchdev_mrouter_notify(struct net_device *dev,
+				 bool on, u16 vid, u16 proto);
+void br_switchdev_mrouter_notify_both(struct net_device *dev, bool on, u16 vid);
 int br_switchdev_port_vlan_add(struct net_device *dev, u16 vid, u16 flags,
 			       bool changed, struct netlink_ext_ack *extack);
 int br_switchdev_port_vlan_del(struct net_device *dev, u16 vid);
@@ -2271,6 +2274,16 @@ static inline void br_switchdev_mdb_notify(struct net_device *dev,
 					   struct net_bridge_mdb_entry *mp,
 					   struct net_bridge_port_group *pg,
 					   int type)
+{
+}
+
+static inline void
+br_switchdev_mrouter_notify(struct net_device *dev, bool on, u16 vid, u16 proto)
+{
+}
+
+static inline void
+br_switchdev_mrouter_notify_both(struct net_device *dev, bool on, u16 vid)
 {
 }
 
