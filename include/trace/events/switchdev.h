@@ -168,6 +168,22 @@ static inline void switchdev_trace_msg_fdb(char *msg, size_t len,
 		 fdbi->offloaded ? " offloaded" : "");
 }
 
+static inline void switchdev_trace_msg_mrouter(char *msg, size_t len,
+					       const struct switchdev_notifier_mrouter_info *mri)
+{
+	switch (mri->proto) {
+	case ETH_P_IP:
+	case ETH_P_IPV6:
+		snprintf(msg, len, " vid %u proto %s", mri->vid,
+			 mri->proto == ETH_P_IP ? "ipv4" : "ipv6");
+		break;
+	default:
+		snprintf(msg, len, " vid %u proto UNKNOWN<%#4x>", mri->vid,
+			 mri->proto);
+		break;
+	}
+}
+
 static inline void switchdev_trace_msg_brport(char *msg, size_t len,
 					   const struct switchdev_brport *brport)
 {
@@ -189,6 +205,7 @@ static inline void switchdev_trace_msg(char *msg, size_t len,
 	const struct switchdev_notifier_port_attr_info *attri;
 	const struct switchdev_notifier_brport_info *brporti;
 	const struct switchdev_notifier_port_obj_info *obji;
+	const struct switchdev_notifier_mrouter_info *mri;
 	const struct switchdev_notifier_fdb_info *fdbi;
 
 	if (switchdev_trace_id(&msg, &len, type, type_strs, ARRAY_SIZE(type_strs)))
@@ -211,6 +228,11 @@ static inline void switchdev_trace_msg(char *msg, size_t len,
 	case SWITCHDEV_VXLAN_FDB_OFFLOADED:
 		fdbi = container_of(info, struct switchdev_notifier_fdb_info, info);
 		switchdev_trace_msg_fdb(msg, len, fdbi);
+		return;
+	case SWITCHDEV_MROUTER_ADD:
+	case SWITCHDEV_MROUTER_DEL:
+		mri = container_of(info, struct switchdev_notifier_mrouter_info, info);
+		switchdev_trace_msg_mrouter(msg, len, mri);
 		return;
 	case SWITCHDEV_PORT_OBJ_ADD:
 	case SWITCHDEV_PORT_OBJ_DEL:
