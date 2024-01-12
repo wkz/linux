@@ -525,53 +525,96 @@ err:
 }
 
 static void br_switchdev_mdb_populate(struct switchdev_obj_port_mdb *mdb,
-				      const struct net_bridge_mdb_entry *mp)
+				      const struct br_ip *ip)
 {
-	if (mp->addr.proto == htons(ETH_P_IP))
-		ip_eth_mc_map(mp->addr.dst.ip4, mdb->addr);
+	if (ip->proto == htons(ETH_P_IP))
+		ip_eth_mc_map(ip->dst.ip4, mdb->addr);
 #if IS_ENABLED(CONFIG_IPV6)
-	else if (mp->addr.proto == htons(ETH_P_IPV6))
-		ipv6_eth_mc_map(&mp->addr.dst.ip6, mdb->addr);
+	else if (ip->proto == htons(ETH_P_IPV6))
+		ipv6_eth_mc_map(&ip->dst.ip6, mdb->addr);
 #endif
 	else
-		ether_addr_copy(mdb->addr, mp->addr.dst.mac_addr);
+		ether_addr_copy(mdb->addr, ip->dst.mac_addr);
 
-	mdb->vid = mp->addr.vid;
+	mdb->vid = ip->vid;
 }
 
-static void br_switchdev_host_mdb_one(struct net_device *dev,
-				      struct net_device *lower_dev,
-				      struct net_bridge_mdb_entry *mp,
-				      int type)
+static void br_switchdev_mdb_do(struct net_device *dev,
+				struct net_device *orig_dev,
+				const struct br_ip *ip,
+				int type,
+				enum switchdev_obj_id id)
 {
+	struct br_switchdev_mdb_complete_info *complete_info;
 	struct switchdev_obj_port_mdb mdb = {
 		.obj = {
-			.id = SWITCHDEV_OBJ_ID_HOST_MDB,
+			.id = id,
 			.flags = SWITCHDEV_F_DEFER,
-			.orig_dev = dev,
+			.orig_dev = orig_dev,
 		},
 	};
 
-	br_switchdev_mdb_populate(&mdb, mp);
+	br_switchdev_mdb_populate(&mdb, ip);
 
 	switch (type) {
 	case RTM_NEWMDB:
-		switchdev_port_obj_add(lower_dev, &mdb.obj, NULL);
+		if (netif_is_bridge_port(orig_dev)) {
+			complete_info = kmalloc(sizeof(*complete_info), GFP_ATOMIC);
+			if (!complete_info)
+				break;
+
+			complete_info->port = br_port_get_rcu(orig_dev);
+			complete_info->ip = *ip;
+			mdb.obj.complete_priv = complete_info;
+			mdb.obj.complete = br_switchdev_mdb_complete;
+
+			if (switchdev_port_obj_add(dev, &mdb.obj, NULL))
+				kfree(complete_info);
+		} else {
+			switchdev_port_obj_add(dev, &mdb.obj, NULL);
+		}
 		break;
 	case RTM_DELMDB:
-		switchdev_port_obj_del(lower_dev, &mdb.obj);
+		switchdev_port_obj_del(dev, &mdb.obj);
 		break;
 	}
 }
 
-static void br_switchdev_host_mdb(struct net_device *dev,
-				  struct net_bridge_mdb_entry *mp, int type)
+static void br_switchdev_mdb_do_lowers(struct net_device *dev,
+				       const struct br_ip *ip, int type,
+				       enum switchdev_obj_id id)
 {
 	struct net_device *lower_dev;
 	struct list_head *iter;
 
 	netdev_for_each_lower_dev(dev, lower_dev, iter)
-		br_switchdev_host_mdb_one(dev, lower_dev, mp, type);
+		br_switchdev_mdb_do(lower_dev, dev, ip, type, id);
+}
+
+static void br_switchdev_port_mdb(struct net_device *dev,
+				  const struct br_ip *ip, int type)
+{
+	br_switchdev_mdb_do(dev, dev, ip, type,
+			    SWITCHDEV_OBJ_ID_PORT_MDB);
+}
+
+static void br_switchdev_host_mdb(struct net_device *dev,
+				  const struct br_ip *ip, int type)
+{
+	br_switchdev_mdb_do_lowers(dev, ip, type, SWITCHDEV_OBJ_ID_HOST_MDB);
+}
+
+void br_switchdev_mdb_notify(struct net_device *dev,
+			     struct net_bridge_mdb_entry *mp,
+			     struct net_bridge_port_group *pg,
+			     int type)
+{
+	struct br_ip *ip = &mp->addr;
+
+	if (pg)
+		br_switchdev_port_mdb(pg->key.port->dev, ip, type);
+	else
+		br_switchdev_host_mdb(dev, ip, type);
 }
 
 static int
@@ -596,7 +639,7 @@ br_switchdev_mdb_replay_one(struct notifier_block *nb, struct net_device *dev,
 
 static int br_switchdev_mdb_queue_one(struct list_head *mdb_list,
 				      enum switchdev_obj_id id,
-				      const struct net_bridge_mdb_entry *mp,
+				      const struct br_ip *ip,
 				      struct net_device *orig_dev)
 {
 	struct switchdev_obj_port_mdb *mdb;
@@ -607,47 +650,10 @@ static int br_switchdev_mdb_queue_one(struct list_head *mdb_list,
 
 	mdb->obj.id = id;
 	mdb->obj.orig_dev = orig_dev;
-	br_switchdev_mdb_populate(mdb, mp);
+	br_switchdev_mdb_populate(mdb, ip);
 	list_add_tail(&mdb->obj.list, mdb_list);
 
 	return 0;
-}
-
-void br_switchdev_mdb_notify(struct net_device *dev,
-			     struct net_bridge_mdb_entry *mp,
-			     struct net_bridge_port_group *pg,
-			     int type)
-{
-	struct br_switchdev_mdb_complete_info *complete_info;
-	struct switchdev_obj_port_mdb mdb = {
-		.obj = {
-			.id = SWITCHDEV_OBJ_ID_PORT_MDB,
-			.flags = SWITCHDEV_F_DEFER,
-		},
-	};
-
-	if (!pg)
-		return br_switchdev_host_mdb(dev, mp, type);
-
-	br_switchdev_mdb_populate(&mdb, mp);
-
-	mdb.obj.orig_dev = pg->key.port->dev;
-	switch (type) {
-	case RTM_NEWMDB:
-		complete_info = kmalloc(sizeof(*complete_info), GFP_ATOMIC);
-		if (!complete_info)
-			break;
-		complete_info->port = pg->key.port;
-		complete_info->ip = mp->addr;
-		mdb.obj.complete_priv = complete_info;
-		mdb.obj.complete = br_switchdev_mdb_complete;
-		if (switchdev_port_obj_add(pg->key.port->dev, &mdb.obj, NULL))
-			kfree(complete_info);
-		break;
-	case RTM_DELMDB:
-		switchdev_port_obj_del(pg->key.port->dev, &mdb.obj);
-		break;
-	}
 }
 
 void br_switchdev_mrouter_notify(struct net_device *dev,
@@ -722,7 +728,7 @@ br_switchdev_mdb_replay(struct net_device *br_dev, struct net_device *dev,
 		if (mp->host_joined) {
 			err = br_switchdev_mdb_queue_one(&mdb_list,
 							 SWITCHDEV_OBJ_ID_HOST_MDB,
-							 mp, br_dev);
+							 &mp->addr, br_dev);
 			if (err) {
 				rcu_read_unlock();
 				goto out_free_mdb;
@@ -736,7 +742,7 @@ br_switchdev_mdb_replay(struct net_device *br_dev, struct net_device *dev,
 
 			err = br_switchdev_mdb_queue_one(&mdb_list,
 							 SWITCHDEV_OBJ_ID_PORT_MDB,
-							 mp, dev);
+							 &mp->addr, dev);
 			if (err) {
 				rcu_read_unlock();
 				goto out_free_mdb;
