@@ -1145,6 +1145,34 @@ br_multicast_is_router(struct net_bridge_mcast *brmctx, const __be16 *proto)
 }
 
 static inline bool
+br_multicast_port_is_router(struct net_bridge_mcast *brmctx,
+			    struct net_bridge_port *port, __be16 proto)
+{
+	struct net_bridge_mcast_port *pmctx;
+
+	switch (ntohs(proto)) {
+	case ETH_P_IP:
+		hlist_for_each_entry_rcu(pmctx, &brmctx->ip4_mc_router_list,
+					 ip4_rlist) {
+			if (pmctx->port == port)
+				return true;
+		}
+		break;
+#if IS_ENABLED(CONFIG_IPV6)
+	case ETH_P_IPV6:
+		hlist_for_each_entry_rcu(pmctx, &brmctx->ip6_mc_router_list,
+					 ip6_rlist) {
+			if (pmctx->port == port)
+				return true;
+		}
+		break;
+#endif
+	}
+
+	return false;
+}
+
+static inline bool
 __br_multicast_querier_exists(struct net_bridge_mcast *brmctx,
 			      struct bridge_mcast_other_query *querier,
 			      const bool is_ipv6)
@@ -1410,6 +1438,13 @@ static inline void br_multicast_flood(struct net_bridge_mdb_entry *mdst,
 
 static inline bool br_multicast_is_router(struct net_bridge_mcast *brmctx,
 					  const __be16 *proto)
+{
+	return false;
+}
+
+static inline bool
+br_multicast_port_is_router(struct net_bridge_mcast *brmctx,
+			    struct net_bridge_port *port, __be16 proto)
 {
 	return false;
 }
