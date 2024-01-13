@@ -1068,6 +1068,7 @@ void br_multicast_set_query_intvl(struct net_bridge_mcast *brmctx,
 				  unsigned long val);
 void br_multicast_set_startup_query_intvl(struct net_bridge_mcast *brmctx,
 					  unsigned long val);
+int br_mdb_weight(const struct net_bridge_mdb_entry *mp);
 
 static inline bool br_group_is_l2(const struct br_ip *group)
 {
