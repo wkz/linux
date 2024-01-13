@@ -1122,16 +1122,16 @@ static inline bool br_ip6_multicast_is_router(struct net_bridge_mcast *brmctx)
 }
 
 static inline bool
-br_multicast_is_router(struct net_bridge_mcast *brmctx, struct sk_buff *skb)
+br_multicast_is_router(struct net_bridge_mcast *brmctx, const __be16 *proto)
 {
 	switch (brmctx->multicast_router) {
 	case MDB_RTR_TYPE_PERM:
 		return true;
 	case MDB_RTR_TYPE_TEMP_QUERY:
-		if (skb) {
-			if (skb->protocol == htons(ETH_P_IP))
+		if (proto) {
+			if (*proto == htons(ETH_P_IP))
 				return br_ip4_multicast_is_router(brmctx);
-			else if (skb->protocol == htons(ETH_P_IPV6))
+			else if (*proto == htons(ETH_P_IPV6))
 				return br_ip6_multicast_is_router(brmctx);
 		} else {
 			return br_ip4_multicast_is_router(brmctx) ||
@@ -1408,7 +1408,7 @@ static inline void br_multicast_flood(struct net_bridge_mdb_entry *mdst,
 }
 
 static inline bool br_multicast_is_router(struct net_bridge_mcast *brmctx,
-					  struct sk_buff *skb)
+					  const __be16 *proto)
 {
 	return false;
 }
