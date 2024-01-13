@@ -604,17 +604,95 @@ static void br_switchdev_host_mdb(struct net_device *dev,
 	br_switchdev_mdb_do_lowers(dev, ip, type, SWITCHDEV_OBJ_ID_HOST_MDB);
 }
 
+static void br_switchdev_mra_mdb_do(struct net_device *dev,
+				    const struct br_ip *ip, int type)
+{
+	if (netif_is_bridge_master(dev))
+		br_switchdev_mdb_do_lowers(dev, ip, type,
+					   SWITCHDEV_OBJ_ID_MRA_MDB);
+	else
+		br_switchdev_mdb_do(dev, dev, ip, type,
+				    SWITCHDEV_OBJ_ID_MRA_MDB);
+}
+
+static void br_switchdev_mra_mdb_mrouters(struct net_bridge_mcast *brmctx,
+					  const struct br_ip *ip,
+					  int type)
+{
+	struct net_bridge_mcast_port *pmctx;
+
+	if (br_multicast_is_router(brmctx, &ip->proto))
+		br_switchdev_mra_mdb_do(brmctx->br->dev, ip, type);
+
+	switch (ntohs(ip->proto)) {
+	case ETH_P_IP:
+		hlist_for_each_entry_rcu(pmctx, &brmctx->ip4_mc_router_list,
+					 ip4_rlist)
+			br_switchdev_mra_mdb_do(pmctx->port->dev, ip, type);
+		break;
+#if IS_ENABLED(CONFIG_IPV6)
+	case ETH_P_IPV6:
+		hlist_for_each_entry_rcu(pmctx, &brmctx->ip6_mc_router_list,
+					 ip6_rlist)
+			br_switchdev_mra_mdb_do(pmctx->port->dev, ip, type);
+		break;
+#endif
+	}
+}
+
+static void br_switchdev_mra_mdb(struct net_bridge *br,
+				 struct net_bridge_port *port,
+				 struct net_bridge_mdb_entry *mp,
+				 int type)
+{
+	struct net_bridge_mcast *brmctx;
+
+	if (br_group_is_l2(&mp->addr))
+		/* No augments to be done for L2 groups, just send the
+		 * the regular notifications, like we do for the port
+		 * and host MDB.
+		 */
+		goto notify;
+
+	brmctx = br_multicast_ctx_get(br, mp->addr.vid);
+
+	if (((type == RTM_NEWMDB) && (br_mdb_weight(mp) == 1)) ||
+	    ((type == RTM_DELMDB) && (br_mdb_weight(mp) == 0)))
+		/* Either the first member was just added to this
+		 * group, in which case have inject all known routers;
+		 * or the last member was just removed, which means we
+		 * have to remove all known routers, reverting the
+		 * group to be unregistered.
+		 */
+		br_switchdev_mra_mdb_mrouters(brmctx, &mp->addr, type);
+
+	if ((port && br_multicast_port_is_router(brmctx, port, mp->addr.proto)) ||
+	    br_multicast_is_router(brmctx, &mp->addr.proto))
+		/* Since the member in question is also a router, the
+		 * group has either already been augmented with it
+		 * (when adding); or the augment should remain in
+		 * place (when removing).
+		 */
+		return;
+
+notify:
+	br_switchdev_mra_mdb_do(port ? port->dev : br->dev, &mp->addr, type);
+}
+
 void br_switchdev_mdb_notify(struct net_device *dev,
 			     struct net_bridge_mdb_entry *mp,
 			     struct net_bridge_port_group *pg,
 			     int type)
 {
+	struct net_bridge *br = netdev_priv(dev);
 	struct br_ip *ip = &mp->addr;
 
 	if (pg)
 		br_switchdev_port_mdb(pg->key.port->dev, ip, type);
 	else
 		br_switchdev_host_mdb(dev, ip, type);
+
+	br_switchdev_mra_mdb(br, pg ? pg->key.port : NULL, mp, type);
 }
 
 static int
@@ -656,6 +734,50 @@ static int br_switchdev_mdb_queue_one(struct list_head *mdb_list,
 	return 0;
 }
 
+static void br_switchdev_mra_mrouter(struct net_device *dev, u16 vid, u16 proto,
+				     int type)
+{
+	const struct net_bridge_mdb_entry *mp;
+	struct net_bridge_port *port = NULL;
+	struct net_bridge *br;
+
+	if (netif_is_bridge_port(dev)) {
+		port = br_port_get_rcu(dev);
+		br = port->br;
+	} else {
+		br = netdev_priv(dev);
+	}
+
+	/* When adding a new router port (or host), inject it into all
+	 * existing groups matching the VLAN and protocol of the
+	 * router, for which the port (or host) is not already a
+	 * member. When removing a router, remove the router port from
+	 * all matching groups, for which the port is not also a
+	 * member.
+	 */
+	hlist_for_each_entry_rcu(mp, &br->mdb_list, mdb_node) {
+		struct net_bridge_port_group __rcu * const *pp;
+		const struct net_bridge_port_group *p;
+
+		if (mp->addr.vid != vid || ntohs(mp->addr.proto) != proto)
+			continue;
+
+		if (!port && !mp->host_joined) {
+			br_switchdev_mra_mdb_do(br->dev, &mp->addr, type);
+			continue;
+		}
+
+		for (pp = &mp->ports; (p = rcu_dereference(*pp)) != NULL;
+		     pp = &p->next) {
+			if (p->key.port == port)
+				goto member;
+		}
+
+		br_switchdev_mra_mdb_do(port->dev, &mp->addr, type);
+	member:
+	}
+}
+
 void br_switchdev_mrouter_notify(struct net_device *dev,
 				 bool on, u16 vid, u16 proto)
 {
@@ -667,12 +789,15 @@ void br_switchdev_mrouter_notify(struct net_device *dev,
 		.proto = proto,
 	};
 
-	if (on)
+	if (on) {
 		call_switchdev_notifiers(SWITCHDEV_MROUTER_ADD,
 					 dev, &mri.info, NULL);
-	else
+		br_switchdev_mra_mrouter(dev, vid, proto, RTM_NEWMDB);
+	} else {
+		br_switchdev_mra_mrouter(dev, vid, proto, RTM_DELMDB);
 		call_switchdev_notifiers(SWITCHDEV_MROUTER_DEL,
 					 dev, &mri.info, NULL);
+	}
 }
 
 void br_switchdev_mrouter_notify_both(struct net_device *dev, bool on, u16 vid)

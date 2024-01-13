@@ -81,6 +81,7 @@ struct switchdev_attr {
 	_fn(PORT_VLAN),			\
 	_fn(PORT_MDB),			\
 	_fn(HOST_MDB),			\
+	_fn(MRA_MDB),			\
 	_fn(MRP),			\
 	_fn(RING_TEST_MRP),		\
 	_fn(RING_ROLE_MRP),		\

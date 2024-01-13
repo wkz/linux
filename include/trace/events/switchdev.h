@@ -150,6 +150,7 @@ static inline void switchdev_trace_msg_obj(char *msg, size_t len,
 		break;
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
 	case SWITCHDEV_OBJ_ID_HOST_MDB:
+	case SWITCHDEV_OBJ_ID_MRA_MDB:
 		mdb = SWITCHDEV_OBJ_PORT_MDB(obj);
 		snprintf(msg, len, " vid %u addr %pM", mdb->vid, mdb->addr);
 		break;
