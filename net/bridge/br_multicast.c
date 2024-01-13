@@ -4628,7 +4628,7 @@ bool br_multicast_router(const struct net_device *dev)
 	bool is_router;
 
 	spin_lock_bh(&br->multicast_lock);
-	is_router = br_multicast_is_router(&br->multicast_ctx, NULL);
+	is_router = br_multicast_is_router(&br->multicast_ctx, htons(ETH_P_ALL));
 	spin_unlock_bh(&br->multicast_lock);
 	return is_router;
 }
