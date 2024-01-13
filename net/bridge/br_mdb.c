@@ -16,6 +16,20 @@
 
 #include "br_private.h"
 
+int br_mdb_weight(const struct net_bridge_mdb_entry *mp)
+{
+	struct net_bridge_port_group __rcu * const *pp;
+	const struct net_bridge_port_group *p;
+	int weight = mp->host_joined ? 1 : 0;
+
+
+	for (pp = &mp->ports; (p = rcu_dereference(*pp)) != NULL;
+	     pp = &p->next)
+		weight++;
+
+	return weight;
+}
+
 static bool
 br_ip4_rports_get_timer(struct net_bridge_mcast_port *pmctx,
 			unsigned long *timer)
