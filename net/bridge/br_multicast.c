@@ -4046,6 +4046,23 @@ static void br_multicast_gc_work(struct work_struct *work)
 	br_multicast_gc(&deleted_head);
 }
 
+
+struct net_bridge_mcast *br_multicast_ctx_get(struct net_bridge *br, u16 vid)
+{
+	struct net_bridge_mcast *brmctx = &br->multicast_ctx;
+	struct net_bridge_vlan *v;
+
+	if (vid) {
+		v = br_vlan_find(br_vlan_group_rcu(br), vid);
+		if (!v)
+			return false;
+
+		brmctx = &v->br_mcast_ctx;
+	}
+
+	return brmctx;
+}
+
 void br_multicast_ctx_init(struct net_bridge *br,
 			   struct net_bridge_vlan *vlan,
 			   struct net_bridge_mcast *brmctx)
