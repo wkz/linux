@@ -744,6 +744,22 @@ static int dsa_user_host_vlan_add(struct net_device *dev,
 	return dsa_port_host_vlan_add(dp, &vlan, extack);
 }
 
+static bool dsa_foreign_dev_check(const struct net_device *dev,
+				  const struct net_device *foreign_dev)
+{
+	const struct dsa_port *dp = dsa_user_to_port(dev);
+	struct dsa_switch_tree *dst = dp->ds->dst;
+
+	if (netif_is_bridge_master(foreign_dev))
+		return !dsa_tree_offloads_bridge_dev(dst, foreign_dev);
+
+	if (netif_is_bridge_port(foreign_dev))
+		return !dsa_tree_offloads_bridge_port(dst, foreign_dev);
+
+	/* Everything else is foreign */
+	return true;
+}
+
 static int dsa_user_port_obj_add(struct net_device *dev, const void *ctx,
 				 const struct switchdev_obj *obj,
 				 struct netlink_ext_ack *extack)
@@ -756,6 +772,11 @@ static int dsa_user_port_obj_add(struct net_device *dev, const void *ctx,
 
 	switch (obj->id) {
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
+		if (dsa_foreign_dev_check(dev, obj->orig_dev)) {
+			err = dsa_port_bridge_host_mdb_add(dp, SWITCHDEV_OBJ_PORT_MDB(obj));
+			break;
+		}
+
 		if (!dsa_port_offloads_bridge_port(dp, obj->orig_dev))
 			return -EOPNOTSUPP;
 
@@ -837,6 +858,11 @@ static int dsa_user_port_obj_del(struct net_device *dev, const void *ctx,
 
 	switch (obj->id) {
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
+		if (dsa_foreign_dev_check(dev, obj->orig_dev)) {
+			err = dsa_port_bridge_host_mdb_del(dp, SWITCHDEV_OBJ_PORT_MDB(obj));
+			break;
+		}
+
 		if (!dsa_port_offloads_bridge_port(dp, obj->orig_dev))
 			return -EOPNOTSUPP;
 
@@ -3502,22 +3528,6 @@ static void dsa_user_switchdev_event_work(struct work_struct *work)
 	}
 
 	kfree(switchdev_work);
-}
-
-static bool dsa_foreign_dev_check(const struct net_device *dev,
-				  const struct net_device *foreign_dev)
-{
-	const struct dsa_port *dp = dsa_user_to_port(dev);
-	struct dsa_switch_tree *dst = dp->ds->dst;
-
-	if (netif_is_bridge_master(foreign_dev))
-		return !dsa_tree_offloads_bridge_dev(dst, foreign_dev);
-
-	if (netif_is_bridge_port(foreign_dev))
-		return !dsa_tree_offloads_bridge_port(dst, foreign_dev);
-
-	/* Everything else is foreign */
-	return true;
 }
 
 static int dsa_user_fdb_event(struct net_device *dev,
