@@ -539,14 +539,15 @@ static void br_switchdev_mdb_populate(struct switchdev_obj_port_mdb *mdb,
 	mdb->vid = mp->addr.vid;
 }
 
-static void br_switchdev_host_mdb_one(struct net_device *dev,
-				      struct net_device *lower_dev,
-				      struct net_bridge_mdb_entry *mp,
-				      int type)
+static void br_switchdev_mdb_one(struct net_device *dev,
+				 struct net_device *lower_dev,
+				 const struct net_bridge_mdb_entry *mp,
+				 enum switchdev_obj_id id,
+				 int type)
 {
 	struct switchdev_obj_port_mdb mdb = {
 		.obj = {
-			.id = SWITCHDEV_OBJ_ID_HOST_MDB,
+			.id = id,
 			.flags = SWITCHDEV_F_DEFER,
 			.orig_dev = dev,
 		},
@@ -565,13 +566,33 @@ static void br_switchdev_host_mdb_one(struct net_device *dev,
 }
 
 static void br_switchdev_host_mdb(struct net_device *dev,
-				  struct net_bridge_mdb_entry *mp, int type)
+				  const struct net_bridge_mdb_entry *mp,
+				  int type)
 {
 	struct net_device *lower_dev;
 	struct list_head *iter;
 
 	netdev_for_each_lower_dev(dev, lower_dev, iter)
-		br_switchdev_host_mdb_one(dev, lower_dev, mp, type);
+		br_switchdev_mdb_one(dev, lower_dev, mp,
+				     SWITCHDEV_OBJ_ID_HOST_MDB, type);
+}
+
+static void br_switchdev_router_mdb(struct net_device *dev,
+				    const struct net_bridge_mdb_entry *mp,
+				    int type)
+{
+	struct net_device *lower_dev;
+	struct list_head *iter;
+
+	if (netif_is_bridge_master(dev)) {
+		netdev_for_each_lower_dev(dev, lower_dev, iter)
+			br_switchdev_mdb_one(dev, lower_dev, mp,
+					     SWITCHDEV_OBJ_ID_ROUTER_MDB,
+					     type);
+	} else {
+		br_switchdev_mdb_one(dev, dev, mp, SWITCHDEV_OBJ_ID_ROUTER_MDB,
+				     type);
+	}
 }
 
 static int
@@ -613,6 +634,48 @@ static int br_switchdev_mdb_queue_one(struct list_head *mdb_list,
 	return 0;
 }
 
+void br_switchdev_mdb_notify_routers(struct net_device *br_dev,
+				     struct net_bridge_mdb_entry *mp,
+				     int type)
+{
+	struct net_bridge_mcast_port *pmctx;
+	struct net_bridge_mcast *brmctx;
+	struct net_bridge *br;
+
+	if (br_group_is_l2(&mp->addr))
+		return;
+
+	if (((type == RTM_NEWMDB) && (br_mdb_weight(mp) != 1)) ||
+	    ((type == RTM_DELMDB) && (br_mdb_weight(mp) != 0)))
+		/* This is neither the first nor the last member of
+		 * this group, so routers will either already have
+		 * been added or should remain in place.
+		 */
+		return;
+
+	br = netdev_priv(br_dev);
+	brmctx = br_multicast_ctx_get(br, mp->addr.vid);
+
+	if (br_multicast_is_router(brmctx, &mp->addr.proto))
+		br_switchdev_router_mdb(br_dev, mp, type);
+
+	switch (ntohs(mp->addr.proto)) {
+	case ETH_P_IP:
+		hlist_for_each_entry_rcu(pmctx, &brmctx->ip4_mc_router_list,
+					 ip4_rlist)
+			br_switchdev_router_mdb(pmctx->port->dev, mp, type);
+		break;
+#if IS_ENABLED(CONFIG_IPV6)
+	case ETH_P_IPV6:
+		hlist_for_each_entry_rcu(pmctx, &brmctx->ip6_mc_router_list,
+					 ip6_rlist)
+			br_switchdev_router_mdb(pmctx->port->dev, mp, type);
+		break;
+#endif
+	}
+
+}
+
 void br_switchdev_mdb_notify(struct net_device *dev,
 			     struct net_bridge_mdb_entry *mp,
 			     struct net_bridge_port_group *pg,
@@ -625,6 +688,8 @@ void br_switchdev_mdb_notify(struct net_device *dev,
 			.flags = SWITCHDEV_F_DEFER,
 		},
 	};
+
+	br_switchdev_mdb_notify_routers(dev, mp, type);
 
 	if (!pg)
 		return br_switchdev_host_mdb(dev, mp, type);
@@ -650,6 +715,33 @@ void br_switchdev_mdb_notify(struct net_device *dev,
 	}
 }
 
+static void br_switchdev_mrouter_notify_groups(struct net_device *dev,
+					       u16 vid, u16 proto, int type)
+{
+	const struct net_bridge_mdb_entry *mp;
+	struct net_bridge_port *port = NULL;
+	struct net_bridge *br;
+
+	if (netif_is_bridge_master(dev)) {
+		br = netdev_priv(dev);
+	} else {
+		port = br_port_get_rcu(dev);
+		br = port->br;
+	}
+
+	/* When adding a new router port (or host), inject it into all
+	 * existing groups matching the VLAN and protocol of the
+	 * router. When removing a router, remove the router port from
+	 * all matching groups.
+	 */
+	hlist_for_each_entry_rcu(mp, &br->mdb_list, mdb_node) {
+		if (mp->addr.vid != vid || ntohs(mp->addr.proto) != proto)
+			continue;
+
+		br_switchdev_router_mdb(dev, mp, type);
+	}
+}
+
 void br_switchdev_mrouter_notify(struct net_device *dev,
 				 bool on, u16 vid, u16 proto)
 {
@@ -661,12 +753,15 @@ void br_switchdev_mrouter_notify(struct net_device *dev,
 		.proto = proto,
 	};
 
-	if (on)
+	if (on) {
 		call_switchdev_notifiers(SWITCHDEV_MROUTER_ADD,
 					 dev, &mri.info, NULL);
-	else
+		br_switchdev_mrouter_notify_groups(dev, vid, proto, RTM_NEWMDB);
+	} else {
+		br_switchdev_mrouter_notify_groups(dev, vid, proto, RTM_DELMDB);
 		call_switchdev_notifiers(SWITCHDEV_MROUTER_DEL,
 					 dev, &mri.info, NULL);
+	}
 }
 
 void br_switchdev_mrouter_notify_both(struct net_device *dev, bool on, u16 vid)
