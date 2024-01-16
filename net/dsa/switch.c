@@ -164,14 +164,6 @@ static int dsa_port_do_mdb_add(struct dsa_port *dp,
 	int port = dp->index;
 	int err = 0;
 
-	/* No need to bother with refcounting for user ports */
-	if (!(dsa_port_is_cpu(dp) || dsa_port_is_dsa(dp))) {
-		err = ds->ops->port_mdb_add(ds, port, mdb, db);
-		trace_dsa_mdb_add_hw(dp, mdb->addr, mdb->vid, &db, err);
-
-		return err;
-	}
-
 	mutex_lock(&dp->addr_lists_lock);
 
 	a = dsa_mac_addr_find(&dp->mdbs, mdb->addr, mdb->vid, db);
@@ -215,14 +207,6 @@ static int dsa_port_do_mdb_del(struct dsa_port *dp,
 	struct dsa_mac_addr *a;
 	int port = dp->index;
 	int err = 0;
-
-	/* No need to bother with refcounting for user ports */
-	if (!(dsa_port_is_cpu(dp) || dsa_port_is_dsa(dp))) {
-		err = ds->ops->port_mdb_del(ds, port, mdb, db);
-		trace_dsa_mdb_del_hw(dp, mdb->addr, mdb->vid, &db, err);
-
-		return err;
-	}
 
 	mutex_lock(&dp->addr_lists_lock);
 
