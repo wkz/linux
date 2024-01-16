@@ -771,6 +771,15 @@ static int dsa_user_port_obj_add(struct net_device *dev, const void *ctx,
 		return 0;
 
 	switch (obj->id) {
+	case SWITCHDEV_OBJ_ID_ROUTER_MDB:
+		if (!dp->ds->mrouter_ports_in_mdb)
+			return -EOPNOTSUPP;
+
+		if (dsa_port_offloads_bridge_dev(dp, obj->orig_dev)) {
+			err = dsa_port_bridge_host_mdb_add(dp, SWITCHDEV_OBJ_PORT_MDB(obj));
+			break;
+		}
+		fallthrough;
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
 		if (dsa_foreign_dev_check(dev, obj->orig_dev)) {
 			err = dsa_port_bridge_host_mdb_add(dp, SWITCHDEV_OBJ_PORT_MDB(obj));
@@ -857,6 +866,15 @@ static int dsa_user_port_obj_del(struct net_device *dev, const void *ctx,
 		return 0;
 
 	switch (obj->id) {
+	case SWITCHDEV_OBJ_ID_ROUTER_MDB:
+		if (!dp->ds->mrouter_ports_in_mdb)
+			return -EOPNOTSUPP;
+
+		if (dsa_port_offloads_bridge_dev(dp, obj->orig_dev)) {
+			err = dsa_port_bridge_host_mdb_del(dp, SWITCHDEV_OBJ_PORT_MDB(obj));
+			break;
+		}
+		fallthrough;
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
 		if (dsa_foreign_dev_check(dev, obj->orig_dev)) {
 			err = dsa_port_bridge_host_mdb_del(dp, SWITCHDEV_OBJ_PORT_MDB(obj));

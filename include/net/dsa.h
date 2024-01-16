@@ -430,6 +430,16 @@ struct dsa_switch {
 	 */
 	u32			fdb_isolation:1;
 
+	/* Inject multicast router ports into the MDB along with regular
+	 * members. Enable this if your device has no dedicated facility to
+	 * ensure that registered IP multicast is also forwarded to all
+	 * applicable routers. Drivers must still ensure that unregistered
+	 * IP multicast is also forwarded to multicast routers by some other
+	 * means (typically by enabling the most specific flooding setting
+	 * available).
+	 */
+	u32			mrouter_ports_in_mdb:1;
+
 	/* Listener for switch fabric events */
 	struct notifier_block	nb;
 
