@@ -149,6 +149,7 @@ ssize_t switchdev_obj_str(const struct switchdev_obj *obj,
 		break;
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
 	case SWITCHDEV_OBJ_ID_HOST_MDB:
+	case SWITCHDEV_OBJ_ID_ROUTER_MDB:
 		mdb = SWITCHDEV_OBJ_PORT_MDB(obj);
 		n = snprintf(cur, len, "vid %u addr %pM", mdb->vid, mdb->addr);
 		break;

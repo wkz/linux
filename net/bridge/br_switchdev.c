@@ -539,14 +539,15 @@ static void br_switchdev_mdb_populate(struct switchdev_obj_port_mdb *mdb,
 	mdb->vid = mp->addr.vid;
 }
 
-static void br_switchdev_host_mdb_one(struct net_device *dev,
-				      struct net_device *lower_dev,
-				      struct net_bridge_mdb_entry *mp,
-				      int type)
+static void br_switchdev_mdb_one(struct net_device *dev,
+				 struct net_device *lower_dev,
+				 const struct net_bridge_mdb_entry *mp,
+				 enum switchdev_obj_id id,
+				 int type)
 {
 	struct switchdev_obj_port_mdb mdb = {
 		.obj = {
-			.id = SWITCHDEV_OBJ_ID_HOST_MDB,
+			.id = id,
 			.flags = SWITCHDEV_F_DEFER,
 			.orig_dev = dev,
 		},
@@ -565,13 +566,33 @@ static void br_switchdev_host_mdb_one(struct net_device *dev,
 }
 
 static void br_switchdev_host_mdb(struct net_device *dev,
-				  struct net_bridge_mdb_entry *mp, int type)
+				  const struct net_bridge_mdb_entry *mp,
+				  int type)
 {
 	struct net_device *lower_dev;
 	struct list_head *iter;
 
 	netdev_for_each_lower_dev(dev, lower_dev, iter)
-		br_switchdev_host_mdb_one(dev, lower_dev, mp, type);
+		br_switchdev_mdb_one(dev, lower_dev, mp,
+				     SWITCHDEV_OBJ_ID_HOST_MDB, type);
+}
+
+static void br_switchdev_router_mdb(struct net_device *dev,
+				    struct net_device *orig_dev,
+				    const struct net_bridge_mdb_entry *mp,
+				    int type)
+{
+	struct list_head *iter;
+
+	if (!dev) {
+		netdev_for_each_lower_dev(orig_dev, dev, iter)
+			br_switchdev_mdb_one(orig_dev, dev, mp,
+					     SWITCHDEV_OBJ_ID_ROUTER_MDB,
+					     type);
+	} else {
+		br_switchdev_mdb_one(orig_dev, dev, mp,
+				     SWITCHDEV_OBJ_ID_ROUTER_MDB, type);
+	}
 }
 
 static int
@@ -632,6 +653,85 @@ static int br_switchdev_mdb_queue_one(struct list_head *mdb_list,
 	return 0;
 }
 
+static int br_switchdev_mdb_replay_routers(struct list_head *mdb_list,
+					   struct net_device *dev,
+					   unsigned long action,
+					   const struct net_bridge_mdb_entry *mp)
+{
+	struct net_bridge_mcast_port *pmctx;
+	struct net_bridge_mcast *brmctx;
+	struct net_bridge *br = mp->br;
+	int err;
+
+	if (br_group_is_l2(&mp->addr))
+		return 0;
+
+	brmctx = br_multicast_ctx_get(br, mp->addr.vid);
+
+	if (br_multicast_is_router(brmctx, mp->addr.proto)) {
+		err = br_switchdev_mdb_queue_one(mdb_list, dev, action,
+						 SWITCHDEV_OBJ_ID_ROUTER_MDB,
+						 mp, br->dev);
+		if (err)
+			return err;
+	}
+
+	switch (ntohs(mp->addr.proto)) {
+	case ETH_P_IP:
+		hlist_for_each_entry(pmctx, &brmctx->ip4_mc_router_list, ip4_rlist) {
+			err = br_switchdev_mdb_queue_one(mdb_list, dev, action,
+							 SWITCHDEV_OBJ_ID_ROUTER_MDB,
+							 mp, pmctx->port->dev);
+			if (err)
+				return err;
+		}
+		break;
+#if IS_ENABLED(CONFIG_IPV6)
+	case ETH_P_IPV6:
+		hlist_for_each_entry(pmctx, &brmctx->ip6_mc_router_list, ip6_rlist) {
+			err = br_switchdev_mdb_queue_one(mdb_list, dev, action,
+							 SWITCHDEV_OBJ_ID_ROUTER_MDB,
+							 mp, pmctx->port->dev);
+			if (err)
+				return err;
+		}
+		break;
+#endif
+	}
+
+	return 0;
+}
+
+static void br_switchdev_mdb_notify_routers(struct net_device *dev,
+					    struct net_bridge_mdb_entry *mp,
+					    int type)
+{
+	struct net_bridge_mcast_port *pmctx;
+	struct net_bridge_mcast *brmctx;
+	struct net_bridge *br = mp->br;
+
+	if (br_group_is_l2(&mp->addr))
+		return;
+
+	brmctx = br_multicast_ctx_get(br, mp->addr.vid);
+
+	if (br_multicast_is_router(brmctx, mp->addr.proto))
+		br_switchdev_router_mdb(dev, mp->br->dev, mp, type);
+
+	switch (ntohs(mp->addr.proto)) {
+	case ETH_P_IP:
+		hlist_for_each_entry(pmctx, &brmctx->ip4_mc_router_list, ip4_rlist)
+			br_switchdev_router_mdb(dev, pmctx->port->dev, mp, type);
+		break;
+#if IS_ENABLED(CONFIG_IPV6)
+	case ETH_P_IPV6:
+		hlist_for_each_entry(pmctx, &brmctx->ip6_mc_router_list, ip6_rlist)
+			br_switchdev_router_mdb(dev, pmctx->port->dev, mp, type);
+		break;
+#endif
+	}
+}
+
 void br_switchdev_mdb_notify(struct net_device *dev,
 			     struct net_bridge_mdb_entry *mp,
 			     struct net_bridge_port_group *pg,
@@ -644,6 +744,9 @@ void br_switchdev_mdb_notify(struct net_device *dev,
 			.flags = SWITCHDEV_F_DEFER,
 		},
 	};
+
+	br_switchdev_mdb_notify_routers(pg ? pg->key.port->dev : NULL,
+					mp, type);
 
 	if (!pg)
 		return br_switchdev_host_mdb(dev, mp, type);
@@ -669,6 +772,36 @@ void br_switchdev_mdb_notify(struct net_device *dev,
 	}
 }
 
+static void br_switchdev_mrouter_notify_groups(struct net_device *orig_dev,
+					       u16 vid, u16 proto, int type)
+{
+	struct net_bridge_port_group __rcu * const *pp;
+	const struct net_bridge_port_group *p;
+	const struct net_bridge_mdb_entry *mp;
+	struct net_bridge_port *port = NULL;
+	struct net_device *dev = orig_dev;
+	struct net_bridge *br;
+
+	if (netif_is_bridge_master(dev)) {
+		br = netdev_priv(dev);
+		dev = NULL;
+	} else {
+		port = br_port_get_rcu(dev);
+		br = port->br;
+	}
+
+	hlist_for_each_entry(mp, &br->mdb_list, mdb_node) {
+		if (mp->addr.vid != vid || ntohs(mp->addr.proto) != proto)
+			continue;
+
+		for (pp = &mp->ports; (p = mlock_dereference(*pp, br)) != NULL;
+		     pp = &p->next) {
+			br_switchdev_router_mdb(p->key.port->dev, orig_dev,
+						mp, type);
+		}
+	}
+}
+
 void br_switchdev_mrouter_notify(struct net_device *dev,
 				 bool on, u16 vid, u16 proto)
 {
@@ -682,10 +815,13 @@ void br_switchdev_mrouter_notify(struct net_device *dev,
 		.proto = proto,
 	};
 
-	if (on)
+	if (on) {
 		switchdev_port_obj_add(dev, &mr.obj, NULL);
-	else
+		br_switchdev_mrouter_notify_groups(dev, vid, proto, RTM_NEWMDB);
+	} else {
+		br_switchdev_mrouter_notify_groups(dev, vid, proto, RTM_DELMDB);
 		switchdev_port_obj_del(dev, &mr.obj);
+	}
 }
 
 #endif
@@ -752,6 +888,13 @@ br_switchdev_mdb_replay(struct net_device *br_dev, struct net_device *dev,
 			err = br_switchdev_mdb_queue_one(&mdb_list, dev, action,
 							 SWITCHDEV_OBJ_ID_PORT_MDB,
 							 mp, dev);
+			if (err) {
+				spin_unlock_bh(&br->multicast_lock);
+				goto out_free_mdb;
+			}
+
+			err = br_switchdev_mdb_replay_routers(&mdb_list, dev,
+							      action, mp);
 			if (err) {
 				spin_unlock_bh(&br->multicast_lock);
 				goto out_free_mdb;

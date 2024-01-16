@@ -1043,6 +1043,7 @@ br_multicast_new_group_src(struct net_bridge_port_group *pg,
 void __br_multicast_del_group_src(struct net_bridge_group_src *src);
 void br_multicast_del_group_src(struct net_bridge_group_src *src,
 				bool fastleave);
+struct net_bridge_mcast *br_multicast_ctx_get(struct net_bridge *br, u16 vid);
 void br_multicast_ctx_init(struct net_bridge *br,
 			   struct net_bridge_vlan *vlan,
 			   struct net_bridge_mcast *brmctx);

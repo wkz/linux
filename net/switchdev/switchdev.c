@@ -41,6 +41,7 @@ static bool switchdev_obj_eq(const struct switchdev_obj *a,
 			va->changed == vb->changed;
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
 	case SWITCHDEV_OBJ_ID_HOST_MDB:
+	case SWITCHDEV_OBJ_ID_ROUTER_MDB:
 		ma = SWITCHDEV_OBJ_PORT_MDB(a);
 		mb = SWITCHDEV_OBJ_PORT_MDB(b);
 		return ma->vid == mb->vid &&
@@ -224,8 +225,8 @@ static size_t switchdev_obj_size(const struct switchdev_obj *obj)
 	case SWITCHDEV_OBJ_ID_PORT_VLAN:
 		return sizeof(struct switchdev_obj_port_vlan);
 	case SWITCHDEV_OBJ_ID_PORT_MDB:
-		return sizeof(struct switchdev_obj_port_mdb);
 	case SWITCHDEV_OBJ_ID_HOST_MDB:
+	case SWITCHDEV_OBJ_ID_ROUTER_MDB:
 		return sizeof(struct switchdev_obj_port_mdb);
 	case SWITCHDEV_OBJ_ID_MROUTER:
 		return sizeof(struct switchdev_obj_mrouter);
