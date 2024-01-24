@@ -437,7 +437,6 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 	u8 synth;
 	int val;
 	int ret;
-	u32 nsec;
 
 	/* Wait for the previous command to finish */
 	ret = readx_poll_timeout_atomic(zl80732_ptp_phase_ctrl_op, dpll,
@@ -446,8 +445,6 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 					READ_SLEEP_US, READ_TIMEOUT_US);
 	if (ret)
 		return ret;
-
-	div_u64_rem(delta, NSEC_PER_SEC, &nsec);
 
 	/* Set the number of steps to take, the value is 1 as we want to finish
 	 * fast
@@ -463,7 +460,7 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 	synth = DPLL_OUTPUT_CTRL_SYNTH_SEL_GET(buf[0]);
 
 	/* Configure the step */
-	register_units = div_s64(nsec * _zl80732_ptp_get_synth_freq(dpll, synth),
+	register_units = div_s64(delta * _zl80732_ptp_get_synth_freq(dpll, synth),
 				 NSEC_PER_SEC);
 
 	memset(buf, 0, sizeof(buf));
