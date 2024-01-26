@@ -996,6 +996,8 @@ static int zl80732_probe(struct platform_device *pdev)
 	zl80732->lock = &ddata->lock;
 	zl80732->regmap = ddata->regmap;
 
+	zl80732_firmware_load(zl80732);
+
 	for (size_t i = 0; i < ZL80732_MAX_DPLLS; ++i) {
 		if (!zl80732_dpll_nco_mode(zl80732, i))
 			continue;
@@ -1006,7 +1008,6 @@ static int zl80732_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, zl80732);
-	zl80732_firmware_load(zl80732);
 
 	return 0;
 }
