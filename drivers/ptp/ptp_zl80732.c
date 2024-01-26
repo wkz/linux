@@ -15,6 +15,9 @@
 
 #include "ptp_private.h"
 
+#define DPLL_MODE_REFSEL(index)			(0x284 + (index) * 0x4)
+#define DPLL_MODE_REFSEL_MODE_GET(val)		(val & GENMASK(2, 0))
+
 #define DPLL_TOD_CTRL(index)			(0x2b8 + (index))
 #define DPLL_TOD_CTRL_SEM			BIT(4)
 
@@ -81,8 +84,6 @@
 #define ZL80732_MAX_DPLLS		2
 #define ZL80732_MAX_OUTPUTS		20
 
-#define ZL80732_DPLL_MASK		BIT(1)
-
 #define READ_SLEEP_US			10
 #define READ_TIMEOUT_US			100000000
 
@@ -95,6 +96,10 @@ static const struct of_device_id zl80732_match[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(of, zl80732_match);
+
+enum zl80732_mode_t {
+	ZL80732_MODE_NCO			= 0x4,
+};
 
 enum zl80732_tod_ctrl_cmd_t {
 	ZL80732_TOD_CTRL_CMD_WRITE_NEXT_1HZ	= 0x1,
@@ -125,7 +130,6 @@ struct zl80732 {
 	struct device		*mfd;
 
 	struct zl80732_dpll	dpll[ZL80732_MAX_DPLLS];
-	u32			dpll_mask;
 };
 
 /* When accessing the registers of the DPLL, it is always required to access
@@ -969,6 +973,14 @@ out:
 	return err;
 }
 
+static bool zl80732_dpll_nco_mode(struct zl80732 *zl80732, int dpll_index)
+{
+	u8 mode;
+
+	zl80732_read(zl80732, DPLL_MODE_REFSEL(dpll_index), &mode, sizeof(mode));
+	return DPLL_MODE_REFSEL_MODE_GET(mode) == ZL80732_MODE_NCO;
+}
+
 static int zl80732_probe(struct platform_device *pdev)
 {
 	struct microchip_dpll_ddata *ddata = dev_get_drvdata(pdev->dev.parent);
@@ -983,10 +995,9 @@ static int zl80732_probe(struct platform_device *pdev)
 	zl80732->mfd = pdev->dev.parent;
 	zl80732->lock = &ddata->lock;
 	zl80732->regmap = ddata->regmap;
-	zl80732->dpll_mask = ZL80732_DPLL_MASK;
 
-	for (int i = 0; i < ZL80732_MAX_DPLLS; ++i) {
-		if (!(zl80732->dpll_mask & BIT(i)))
+	for (size_t i = 0; i < ZL80732_MAX_DPLLS; ++i) {
+		if (!zl80732_dpll_nco_mode(zl80732, i))
 			continue;
 
 		err = zl80732_ptp_init(zl80732, i);
@@ -1005,7 +1016,7 @@ static int zl80732_remove(struct platform_device *pdev)
 	struct zl80732 *zl80732 = platform_get_drvdata(pdev);
 
 	for (int i = 0; i < ZL80732_MAX_DPLLS; ++i) {
-		if (!(zl80732->dpll_mask & BIT(i)))
+		if (!zl80732_dpll_nco_mode(zl80732, i))
 			continue;
 
 		ptp_clock_unregister(zl80732->dpll[i].clock);
