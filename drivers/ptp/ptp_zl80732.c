@@ -502,7 +502,7 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 	return 0;
 }
 
-static void zl80732_ptp_stop_clock(struct zl80732_dpll *dpll)
+static void zl80732_ptp_stop_1pps(struct zl80732_dpll *dpll)
 {
 	struct zl80732 *zl80732 = dpll->zl80732;
 	u8 buf;
@@ -523,7 +523,7 @@ static void zl80732_ptp_stop_clock(struct zl80732_dpll *dpll)
 	}
 }
 
-static void zl80732_ptp_start_clock(struct zl80732_dpll *dpll)
+static void zl80732_ptp_start_1pps(struct zl80732_dpll *dpll)
 {
 	struct zl80732 *zl80732 = dpll->zl80732;
 	u8 buf;
@@ -559,7 +559,7 @@ static int zl80732_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
 	 * the listeners of the 1PPS will not see multiple signals.
 	 */
 	if (dpll->perout_mask)
-		zl80732_ptp_stop_clock(dpll);
+		zl80732_ptp_stop_1pps(dpll);
 
 	if (delta >= NSEC_PER_SEC || delta <= -NSEC_PER_SEC) {
 		/* wait for rollover */
@@ -898,7 +898,7 @@ static long zl80732_ptp_do_aux_work(struct ptp_clock_info *ptp)
 	struct zl80732_dpll *dpll = container_of(ptp, struct zl80732_dpll, info);
 
 	if (dpll->perout_mask)
-		zl80732_ptp_start_clock(dpll);
+		zl80732_ptp_start_1pps(dpll);
 
 	return -1;
 }
