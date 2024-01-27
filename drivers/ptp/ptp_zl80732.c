@@ -71,6 +71,7 @@
 #define DPLL_OUTPUT_MODE			0x705
 #define DPLL_OUTPUT_MODE_SIZE			1
 #define DPLL_OUTPUT_MODE_SIGNAL_FORMAT(val)	((val) << 4)
+#define DPLL_OUTPUT_MODE_SIGNAL_FORMAT_GET(val) ((val & GENMASK(7, 4)) >> 4)
 #define DPLL_OUTPUT_MODE_SIGNAL_FORMAT_MASK	GENMASK(7, 4)
 #define DPLL_OUTPUT_DIV				0x70c
 #define DPLL_OUTPUT_DIV_SIZE			4
@@ -91,6 +92,9 @@
 #define ZL80732_FW_WHITESPACES_SIZE	3
 #define ZL80732_FW_COMMAND_SIZE		1
 
+#define ZL80732_P_PIN(pin)		((pin) % 2 == 0)
+#define ZL80732_N_PIN(pin)		(!ZL80732_P_PIN(pin))
+
 static const struct of_device_id zl80732_match[] = {
 	{ .compatible = "microchip,zl80732-phc" },
 	{ }
@@ -108,6 +112,8 @@ enum zl80732_tod_ctrl_cmd_t {
 };
 
 enum zl80732_output_mode_signal_format_t {
+	ZL80732_BOTH_DISABLED			= 0x0,
+	ZL80732_BOTH_ENABLED			= 0x4,
 	ZL80732_P_ENABLE			= 0x5,
 	ZL80732_N_ENABLE			= 0x6,
 };
@@ -458,7 +464,10 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 	zl80732_write(zl80732, DPLL_OUTPUT_PHASE_STEP_NUMBER, buf,
 		      DPLL_OUTPUT_PHASE_STEP_NUMBER_SIZE);
 
-	/* Get the synth that is connected to the output */
+	/* Get the synth that is connected to the output, it is OK to get the
+	 * synth for only 1 output as it is expected that all the outputs that
+	 * are used by 1PPS are connected to same synth.
+	 */
 	zl80732_read(zl80732, DPLL_OUTPUT_CTRL(__ffs(dpll->perout_mask)), buf,
 		     DPLL_OUTPUT_CTRL_SIZE);
 	synth = DPLL_OUTPUT_CTRL_SYNTH_SEL_GET(buf[0]);
@@ -498,14 +507,20 @@ static void zl80732_ptp_stop_clock(struct zl80732_dpll *dpll)
 	struct zl80732 *zl80732 = dpll->zl80732;
 	u8 buf;
 
-	zl80732_read(zl80732, DPLL_OUTPUT_CTRL(__ffs(dpll->perout_mask)), &buf,
-		     DPLL_OUTPUT_CTRL_SIZE);
-	buf |= DPLL_OUTPUT_CTRL_STOP;
+	for (size_t i = 0; i < ZL80732_MAX_OUTPUTS; ++i) {
+		if (!(BIT(i) & dpll->perout_mask))
+			continue;
 
-	buf &= ~(DPLL_OUTPUT_CTRL_STOP_HZ & DPLL_OUTPUT_CTRL_STOP_HIGH);
+		zl80732_read(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+			     DPLL_OUTPUT_CTRL_SIZE);
+		buf |= DPLL_OUTPUT_CTRL_STOP;
 
-	zl80732_write(zl80732, DPLL_OUTPUT_CTRL(__ffs(dpll->perout_mask)), &buf,
-		      DPLL_OUTPUT_CTRL_SIZE);
+		buf &= ~(DPLL_OUTPUT_CTRL_STOP_HZ &
+			 DPLL_OUTPUT_CTRL_STOP_HIGH);
+
+		zl80732_write(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+			      DPLL_OUTPUT_CTRL_SIZE);
+	}
 }
 
 static void zl80732_ptp_start_clock(struct zl80732_dpll *dpll)
@@ -513,12 +528,17 @@ static void zl80732_ptp_start_clock(struct zl80732_dpll *dpll)
 	struct zl80732 *zl80732 = dpll->zl80732;
 	u8 buf;
 
-	zl80732_read(zl80732, DPLL_OUTPUT_CTRL(__ffs(dpll->perout_mask)), &buf,
-		     DPLL_OUTPUT_CTRL_SIZE);
-	buf &= ~DPLL_OUTPUT_CTRL_STOP;
+	for (size_t i = 0; i < ZL80732_MAX_OUTPUTS; ++i) {
+		if (!(BIT(i) & dpll->perout_mask))
+			continue;
 
-	zl80732_write(zl80732, DPLL_OUTPUT_CTRL(__ffs(dpll->perout_mask)), &buf,
-		      DPLL_OUTPUT_CTRL_SIZE);
+		zl80732_read(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+			     DPLL_OUTPUT_CTRL_SIZE);
+		buf &= ~DPLL_OUTPUT_CTRL_STOP;
+
+		zl80732_write(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+			      DPLL_OUTPUT_CTRL_SIZE);
+	}
 }
 
 static int zl80732_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
@@ -604,6 +624,31 @@ static int zl80732_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 	return 0;
 }
 
+static enum zl80732_output_mode_signal_format_t
+_zl80732_ptp_disable_pin(enum zl80732_output_mode_signal_format_t current_mode,
+			 u8 pin)
+{
+	switch (current_mode) {
+	case ZL80732_P_ENABLE:
+		if (ZL80732_P_PIN(pin))
+			return ZL80732_BOTH_DISABLED;
+		break;
+	case ZL80732_N_ENABLE:
+		if (ZL80732_N_PIN(pin))
+			return ZL80732_BOTH_DISABLED;
+		break;
+	case ZL80732_BOTH_ENABLED:
+		if (ZL80732_P_PIN(pin))
+			return ZL80732_N_ENABLE;
+		else
+			return ZL80732_P_ENABLE;
+	default:
+		return ZL80732_BOTH_DISABLED;
+	}
+
+	return ZL80732_BOTH_DISABLED;
+}
+
 static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
 				      struct ptp_perout_request *perout)
 {
@@ -612,6 +657,7 @@ static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
 	int pin;
 	int ret;
 	int val;
+	u8 mode;
 
 	pin = ptp_find_pin(dpll->clock, PTP_PF_PEROUT, perout->index);
 	if (pin == -1 || pin >= ZL80732_MAX_OUTPUTS)
@@ -641,11 +687,10 @@ static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
 	zl80732_read(zl80732, DPLL_OUTPUT_MODE, buf,
 		     DPLL_OUTPUT_MODE_SIZE);
 
+	mode = DPLL_OUTPUT_MODE_SIGNAL_FORMAT_GET(buf[0]);
 	buf[0] &= ~DPLL_OUTPUT_MODE_SIGNAL_FORMAT_MASK;
-	if (pin % 2)
-		buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(ZL80732_P_ENABLE);
-	else
-		buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(ZL80732_N_ENABLE);
+	buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(_zl80732_ptp_disable_pin(mode,
+									  pin));
 
 	/* Update the configuration */
 	zl80732_write(zl80732, DPLL_OUTPUT_MODE, buf,
@@ -670,6 +715,31 @@ static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
 	return 0;
 }
 
+static enum zl80732_output_mode_signal_format_t
+_zl80732_ptp_enable_pin(enum zl80732_output_mode_signal_format_t current_mode,
+			u8 pin)
+{
+	switch (current_mode) {
+	case ZL80732_P_ENABLE:
+		if (ZL80732_N_PIN(pin))
+			return ZL80732_BOTH_ENABLED;
+		break;
+	case ZL80732_N_ENABLE:
+		if (ZL80732_P_PIN(pin))
+			return ZL80732_BOTH_ENABLED;
+		break;
+	case ZL80732_BOTH_DISABLED:
+		if (ZL80732_P_PIN(pin))
+			return ZL80732_P_ENABLE;
+		else
+			return ZL80732_N_ENABLE;
+	default:
+		return ZL80732_BOTH_ENABLED;
+	}
+
+	return ZL80732_BOTH_ENABLED;
+}
+
 static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
 				     struct ptp_perout_request *perout)
 {
@@ -681,6 +751,7 @@ static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
 	int pin;
 	int ret;
 	int val;
+	u8 mode;
 
 	pin = ptp_find_pin(dpll->clock, PTP_PF_PEROUT, perout->index);
 	if (pin == -1 || pin >= ZL80732_MAX_OUTPUTS)
@@ -710,11 +781,10 @@ static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
 	zl80732_read(zl80732, DPLL_OUTPUT_MODE, buf,
 		     DPLL_OUTPUT_MODE_SIZE);
 
+	mode = DPLL_OUTPUT_MODE_SIGNAL_FORMAT_GET(buf[0]);
 	buf[0] &= ~DPLL_OUTPUT_MODE_SIGNAL_FORMAT_MASK;
-	if (pin % 2)
-		buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(ZL80732_N_ENABLE);
-	else
-		buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(ZL80732_P_ENABLE);
+	buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(_zl80732_ptp_enable_pin(mode,
+									 pin));
 
 	/* Update the configuration */
 	zl80732_write(zl80732, DPLL_OUTPUT_MODE, buf,
