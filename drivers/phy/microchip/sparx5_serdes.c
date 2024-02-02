@@ -1129,11 +1129,9 @@ static void sparx5_serdes_cmu_power_off(struct sparx5_serdes_private *priv)
 			      SD_CMU_CFG_SD_CMU_CFG_EXT_CFG_RST, cmu_cfg_inst,
 			      SD_CMU_CFG_SD_CMU_CFG(0));
 
-		if (priv->data->type == SPX5_TARGET_SPARX5) {
-			sdx5_inst_rmw(SD_CMU_CMU_05_CFG_REFCK_TERM_EN_SET(0),
-				      SD_CMU_CMU_05_CFG_REFCK_TERM_EN, cmu_inst,
-				      SD_CMU_CMU_05(0));
-		}
+		sdx5_inst_rmw(SD_CMU_CMU_05_CFG_REFCK_TERM_EN_SET(0),
+			      SD_CMU_CMU_05_CFG_REFCK_TERM_EN, cmu_inst,
+			      SD_CMU_CMU_05(0));
 
 		sdx5_inst_rmw(SD_CMU_CMU_09_CFG_EN_TX_CK_DN_SET(0),
 			      SD_CMU_CMU_09_CFG_EN_TX_CK_DN, cmu_inst,
@@ -1151,16 +1149,14 @@ static void sparx5_serdes_cmu_power_off(struct sparx5_serdes_private *priv)
 			      SD_CMU_CMU_08_CFG_CK_TREE_PD, cmu_inst,
 			      SD_CMU_CMU_08(0));
 
-		if (priv->data->type == SPX5_TARGET_SPARX5) {
-			sdx5_inst_rmw(
-				SD_CMU_CMU_0D_CFG_REFCK_PD_SET(1) |
-				SD_CMU_CMU_0D_CFG_PD_DIV64_SET(1) |
-				SD_CMU_CMU_0D_CFG_PD_DIV66_SET(1),
-				SD_CMU_CMU_0D_CFG_REFCK_PD |
-				SD_CMU_CMU_0D_CFG_PD_DIV64 |
-				SD_CMU_CMU_0D_CFG_PD_DIV66,
-				cmu_inst, SD_CMU_CMU_0D(0));
-		}
+		sdx5_inst_rmw(
+			SD_CMU_CMU_0D_CFG_REFCK_PD_SET(1) |
+			SD_CMU_CMU_0D_CFG_PD_DIV64_SET(1) |
+			SD_CMU_CMU_0D_CFG_PD_DIV66_SET(1),
+			SD_CMU_CMU_0D_CFG_REFCK_PD |
+			SD_CMU_CMU_0D_CFG_PD_DIV64 |
+			SD_CMU_CMU_0D_CFG_PD_DIV66,
+			cmu_inst, SD_CMU_CMU_0D(0));
 
 		sdx5_inst_rmw(SD_CMU_CMU_06_CFG_CTRL_LOGIC_PD_SET(1),
 			      SD_CMU_CMU_06_CFG_CTRL_LOGIC_PD, cmu_inst,
@@ -2688,7 +2684,8 @@ static int sparx5_serdes_probe(struct platform_device *pdev)
 	}
 
 	/* Power down all CMU's by default */
-	sparx5_serdes_cmu_power_off(priv);
+	if (priv->data->type == SPX5_TARGET_SPARX5)
+		sparx5_serdes_cmu_power_off(priv);
 
 	provider = devm_of_phy_provider_register(priv->dev, sparx5_serdes_xlate);
 
