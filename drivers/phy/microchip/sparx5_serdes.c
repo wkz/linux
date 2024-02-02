@@ -23,6 +23,7 @@
 
 #define SPX5_SERDES_10G_START 13
 #define SPX5_SERDES_25G_START 25
+#define SPX5_SERDES_25G_CNT (SPX5_SERDES_25G_START - SPX5_SERDES_10G_START)
 
 /* Optimal power settings from GUC */
 #define SPX5_SERDES_QUIET_MODE_VAL 0x1EF4E0C
@@ -1161,6 +1162,28 @@ static void sparx5_serdes_cmu_power_off(struct sparx5_serdes_private *priv)
 		sdx5_inst_rmw(SD_CMU_CMU_06_CFG_CTRL_LOGIC_PD_SET(1),
 			      SD_CMU_CMU_06_CFG_CTRL_LOGIC_PD, cmu_inst,
 			      SD_CMU_CMU_06(0));
+	}
+
+	for (i = i; i < SPX5_SERDES_25G_CNT; i++) {
+		sdx5_rmw(SD_LANE_25G_SD_LANE_CFG_EXT_CFG_RST_SET(1),
+			      SD_LANE_25G_SD_LANE_CFG_EXT_CFG_RST,
+			      priv, SD_LANE_25G_SD_LANE_CFG(i));
+
+		sdx5_rmw(SD_LANE_25G_SD_LANE_CFG_EXT_CFG_RST_SET(0),
+			      SD_LANE_25G_SD_LANE_CFG_EXT_CFG_RST,
+			      priv, SD_LANE_25G_SD_LANE_CFG(i));
+
+		sdx5_rmw(SD25G_LANE_CMU_FF_REGISTER_TABLE_INDEX_SET(0xff),
+			      SD25G_LANE_CMU_FF_REGISTER_TABLE_INDEX,
+			      priv, SD25G_LANE_CMU_FF(i));
+
+		sdx5_rmw(SD25G_LANE_CMU_31_CFG_COMMON_RESERVE_7_0_SET(1),
+			      SD25G_LANE_CMU_31_CFG_COMMON_RESERVE_7_0,
+			      priv, SD25G_LANE_CMU_31(i));
+
+		sdx5_rmw(SD25G_LANE_CMU_FF_REGISTER_TABLE_INDEX_SET(0),
+			      SD25G_LANE_CMU_FF_REGISTER_TABLE_INDEX,
+			      priv, SD25G_LANE_CMU_FF(i));
 	}
 }
 
