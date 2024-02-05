@@ -216,6 +216,26 @@ enum vcap_is1_port_sel_rt {
 	VCAP_IS1_PS_RT_FOLLOW_OTHER = 7,
 };
 
+#ifdef CONFIG_MFD_LAN966X_PCI
+
+#define PCIE_ATU_REGION_MAX  6
+
+struct lan966x_pci_atu_region {
+	u64 base_addr;  /* Base addr of the OB windows */
+	u64 limit_addr; /* Limit addr of the OB window */
+	u64 target_addr /* Target addr */;
+	int idx;
+};
+
+void lan966x_pci_atu_init(struct lan966x *lan966x);
+int lan966x_pci_atu_region_unmap(struct lan966x *lan966x,
+				 struct lan966x_pci_atu_region *region);
+struct lan966x_pci_atu_region *
+lan966x_pci_atu_region_map(struct lan966x *lan966x, u64 target_addr, int size);
+u64 lan966x_pci_atu_get_mapped_addr(struct lan966x_pci_atu_region *region,
+				    u64 addr);
+#endif
+
 struct lan966x_port;
 
 struct lan966x_db {
@@ -274,6 +294,10 @@ struct lan966x_rx {
 	u8 channel_id;
 
 	struct page_pool *page_pool;
+
+#ifdef CONFIG_MFD_LAN966X_PCI
+	struct lan966x_pci_atu_region *atu;
+#endif
 };
 
 struct lan966x_tx_dcb_buf {
@@ -300,7 +324,9 @@ struct lan966x_tx {
 
 	/* Represents the DMA address to the first entry of the dcb entries. */
 	dma_addr_t dma;
-
+#ifdef CONFIG_MFD_LAN966X_PCI
+	struct lan966x_pci_atu_region *atu;
+#endif
 	/* Array of dcbs that are given to the HW */
 	struct lan966x_tx_dcb_buf *dcbs_buf;
 
@@ -498,6 +524,11 @@ struct lan966x {
 	struct lan966x_rx rx;
 	struct lan966x_tx tx;
 	struct napi_struct napi;
+
+#ifdef CONFIG_MFD_LAN966X_PCI
+	/* fdma pci */
+	struct lan966x_pci_atu_region atu_regions[PCIE_ATU_REGION_MAX];
+#endif
 
 	/* Mirror */
 	struct lan966x_port *mirror_monitor;
