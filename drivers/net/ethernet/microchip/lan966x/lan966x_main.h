@@ -460,6 +460,19 @@ struct lan966x_pmac {
 	struct lan966x_pmac_vlan_entry vlan_entries[LAN966X_PMAC_VLAN_ENTRIES];
 };
 
+struct lan966x_ops {
+	int (*fdma_init)(struct lan966x *lan966x);
+	void (*fdma_deinit)(struct lan966x *lan966x);
+	int (*fdma_xmit)(struct sk_buff *skb, __be32 *ifh,
+			 struct net_device *dev);
+	int (*fdma_poll)(struct napi_struct *napi, int weight);
+	int (*fdma_mtu)(struct lan966x *lan966x);
+};
+
+struct lan966x_match_data {
+	const struct lan966x_ops ops;
+};
+
 struct lan966x {
 	struct device *dev;
 
@@ -560,6 +573,8 @@ struct lan966x {
 
 	struct hlist_head mep_list;
 	struct hlist_head mip_list;
+
+	const struct lan966x_match_data *data;
 };
 
 struct lan966x_port_config {

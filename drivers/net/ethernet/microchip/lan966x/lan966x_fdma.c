@@ -1006,11 +1006,13 @@ int lan966x_fdma_reload_page_pool(struct lan966x *lan966x)
 
 void lan966x_fdma_netdev_init(struct lan966x *lan966x, struct net_device *dev)
 {
+	const struct lan966x_ops *ops = &lan966x->data->ops;
+
 	if (lan966x->fdma_ndev)
 		return;
 
 	lan966x->fdma_ndev = dev;
-	netif_napi_add(dev, &lan966x->napi, lan966x_fdma_napi_poll);
+	netif_napi_add(dev, &lan966x->napi, ops->fdma_poll);
 	napi_enable(&lan966x->napi);
 }
 

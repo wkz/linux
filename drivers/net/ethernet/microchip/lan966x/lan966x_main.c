@@ -29,12 +29,6 @@
 
 #define IO_RANGES 2
 
-static const struct of_device_id lan966x_match[] = {
-	{ .compatible = "microchip,lan966x-switch" },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, lan966x_match);
-
 struct lan966x_main_io_resource {
 	enum lan966x_target id;
 	phys_addr_t offset;
@@ -388,11 +382,14 @@ netdev_tx_t lan966x_xmit(struct lan966x_port *port,
 			 __be32 ifh[IFH_LEN])
 {
 	struct lan966x *lan966x = port->lan966x;
+	const struct lan966x_ops *ops;
 	int err;
+
+	ops = &lan966x->data->ops;
 
 	spin_lock(&lan966x->tx_lock);
 	if (port->lan966x->fdma)
-		err = lan966x_fdma_xmit(skb, ifh, port->dev);
+		err = ops->fdma_xmit(skb, ifh, port->dev);
 	else
 		err = lan966x_port_ifh_xmit(skb, ifh, port->dev);
 	spin_unlock(&lan966x->tx_lock);
@@ -431,8 +428,11 @@ static int lan966x_port_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct lan966x_port *port = netdev_priv(dev);
 	struct lan966x *lan966x = port->lan966x;
+	const struct lan966x_ops *ops;
 	int old_mtu = dev->mtu;
 	int err;
+
+	ops = &lan966x->data->ops;
 
 	lan_wr(DEV_MAC_MAXLEN_CFG_MAX_LEN_SET(LAN966X_HW_MTU(new_mtu)),
 	       lan966x, DEV_MAC_MAXLEN_CFG(port->chip_port));
@@ -441,7 +441,7 @@ static int lan966x_port_change_mtu(struct net_device *dev, int new_mtu)
 	if (!lan966x->fdma)
 		return 0;
 
-	err = lan966x_fdma_change_mtu(lan966x);
+	err = ops->fdma_mtu(lan966x);
 	if (err) {
 		lan_wr(DEV_MAC_MAXLEN_CFG_MAX_LEN_SET(LAN966X_HW_MTU(old_mtu)),
 		       lan966x, DEV_MAC_MAXLEN_CFG(port->chip_port));
@@ -1160,6 +1160,7 @@ static int lan966x_reset_switch(struct lan966x *lan966x)
 static int lan966x_probe(struct platform_device *pdev)
 {
 	struct fwnode_handle *ports, *portnp;
+	const struct lan966x_ops *ops;
 	struct lan966x *lan966x;
 	u8 mac_addr[ETH_ALEN];
 	int err;
@@ -1170,6 +1171,12 @@ static int lan966x_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, lan966x);
 	lan966x->dev = &pdev->dev;
+
+	lan966x->data = device_get_match_data(lan966x->dev);
+	if (!lan966x->data)
+		return -EINVAL;
+
+	ops = &lan966x->data->ops;
 
 	lan966x->debugfs_root = debugfs_create_dir("lan966x", NULL);
 
@@ -1311,7 +1318,7 @@ static int lan966x_probe(struct platform_device *pdev)
 	if (err)
 		goto cleanup_fdb;
 
-	err = lan966x_fdma_init(lan966x);
+	err = ops->fdma_init(lan966x);
 	if (err)
 		goto cleanup_ptp;
 
@@ -1335,7 +1342,7 @@ static int lan966x_probe(struct platform_device *pdev)
 	return 0;
 
 cleanup_fdma:
-	lan966x_fdma_deinit(lan966x);
+	ops->fdma_deinit(lan966x);
 
 cleanup_ptp:
 	lan966x_ptp_deinit(lan966x);
@@ -1359,6 +1366,7 @@ cleanup_ports:
 static int lan966x_remove(struct platform_device *pdev)
 {
 	struct lan966x *lan966x = platform_get_drvdata(pdev);
+	const struct lan966x_ops *ops = &lan966x->data->ops;
 
 	lan966x_cfm_uninit(lan966x);
 	lan966x_mrp_uninit(lan966x);
@@ -1372,7 +1380,7 @@ static int lan966x_remove(struct platform_device *pdev)
 
 	lan966x_taprio_deinit(lan966x);
 	lan966x_vcap_deinit(lan966x);
-	lan966x_fdma_deinit(lan966x);
+	ops->fdma_deinit(lan966x);
 	lan966x_cleanup_ports(lan966x);
 
 	cancel_delayed_work_sync(&lan966x->stats_work);
@@ -1388,6 +1396,22 @@ static int lan966x_remove(struct platform_device *pdev)
 
 	return 0;
 }
+
+static const struct lan966x_match_data lan966x_desc = {
+	.ops = {
+		.fdma_init = &lan966x_fdma_init,
+		.fdma_deinit = &lan966x_fdma_deinit,
+		.fdma_xmit = &lan966x_fdma_xmit,
+		.fdma_poll = &lan966x_fdma_napi_poll,
+		.fdma_mtu = &lan966x_fdma_change_mtu,
+	},
+};
+
+static const struct of_device_id lan966x_match[] = {
+	{ .compatible = "microchip,lan966x-switch", .data = &lan966x_desc },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, lan966x_match);
 
 static struct platform_driver lan966x_driver = {
 	.probe = lan966x_probe,
