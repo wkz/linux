@@ -6,6 +6,13 @@
 
 #include "lan966x_main.h"
 
+void lan966x_fdma_llp_configure(struct lan966x *lan966x, u64 addr,
+				u8 channel_id)
+{
+	lan_wr(lower_32_bits(addr), lan966x, FDMA_DCB_LLP(channel_id));
+	lan_wr(upper_32_bits(addr), lan966x, FDMA_DCB_LLP1(channel_id));
+}
+
 static int lan966x_fdma_channel_active(struct lan966x *lan966x)
 {
 	return lan_rd(lan966x, FDMA_CH_ACTIVE);
@@ -144,6 +151,8 @@ static int lan966x_fdma_rx_alloc(struct lan966x_rx *rx)
 		lan966x_fdma_rx_add_dcb(rx, dcb, rx->dma + sizeof(*dcb) * i);
 	}
 
+	lan966x_fdma_llp_configure(lan966x, rx->dma, rx->channel_id);
+
 	return 0;
 }
 
@@ -168,14 +177,6 @@ void lan966x_fdma_rx_start(struct lan966x_rx *rx)
 {
 	struct lan966x *lan966x = rx->lan966x;
 	u32 mask;
-
-	/* When activating a channel, first is required to write the first DCB
-	 * address and then to activate it
-	 */
-	lan_wr(lower_32_bits((u64)rx->dma), lan966x,
-	       FDMA_DCB_LLP(rx->channel_id));
-	lan_wr(upper_32_bits((u64)rx->dma), lan966x,
-	       FDMA_DCB_LLP1(rx->channel_id));
 
 	lan_wr(FDMA_CH_CFG_CH_DCB_DB_CNT_SET(FDMA_RX_DCB_MAX_DBS) |
 	       FDMA_CH_CFG_CH_INTR_DB_EOF_ONLY_SET(1) |
@@ -270,6 +271,9 @@ static int lan966x_fdma_tx_alloc(struct lan966x_tx *tx)
 		lan966x_fdma_tx_add_dcb(tx, dcb);
 	}
 
+	lan966x_fdma_llp_configure(lan966x, lan966x->tx.dma,
+				   lan966x->tx.channel_id);
+
 	return 0;
 
 out:
@@ -293,14 +297,6 @@ void lan966x_fdma_tx_activate(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
 	u32 mask;
-
-	/* When activating a channel, first is required to write the first DCB
-	 * address and then to activate it
-	 */
-	lan_wr(lower_32_bits((u64)tx->dma), lan966x,
-	       FDMA_DCB_LLP(tx->channel_id));
-	lan_wr(upper_32_bits((u64)tx->dma), lan966x,
-	       FDMA_DCB_LLP1(tx->channel_id));
 
 	lan_wr(FDMA_CH_CFG_CH_DCB_DB_CNT_SET(FDMA_TX_DCB_MAX_DBS) |
 	       FDMA_CH_CFG_CH_INTR_DB_EOF_ONLY_SET(1) |

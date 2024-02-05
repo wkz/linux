@@ -826,6 +826,8 @@ void lan966x_fdma_rx_disable(struct lan966x_rx *rx);
 void lan966x_fdma_tx_disable(struct lan966x_tx *tx);
 void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx, struct lan966x_tx_dcb *dcb);
 int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx);
+void lan966x_fdma_llp_configure(struct lan966x *lan966x, u64 addr,
+				u8 channel_id);
 void lan966x_fdma_stop_netdev(struct lan966x *lan966x);
 int lan966x_qsys_sw_status(struct lan966x *lan966x);
 void lan966x_fdma_tx_reload(struct lan966x_tx *tx);
