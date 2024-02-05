@@ -147,7 +147,7 @@ static int lan966x_fdma_rx_alloc(struct lan966x_rx *rx)
 	return 0;
 }
 
-static void lan966x_fdma_rx_advance_dcb(struct lan966x_rx *rx)
+void lan966x_fdma_rx_advance_dcb(struct lan966x_rx *rx)
 {
 	rx->dcb_index++;
 	rx->dcb_index &= FDMA_DCB_MAX - 1;
@@ -164,7 +164,7 @@ static void lan966x_fdma_rx_free(struct lan966x_rx *rx)
 	dma_free_coherent(lan966x->dev, size, rx->dcbs, rx->dma);
 }
 
-static void lan966x_fdma_rx_start(struct lan966x_rx *rx)
+void lan966x_fdma_rx_start(struct lan966x_rx *rx)
 {
 	struct lan966x *lan966x = rx->lan966x;
 	u32 mask;
@@ -202,7 +202,7 @@ static void lan966x_fdma_rx_start(struct lan966x_rx *rx)
 		lan966x, FDMA_CH_ACTIVATE);
 }
 
-static void lan966x_fdma_rx_disable(struct lan966x_rx *rx)
+void lan966x_fdma_rx_disable(struct lan966x_rx *rx)
 {
 	struct lan966x *lan966x = rx->lan966x;
 	u32 val;
@@ -221,7 +221,7 @@ static void lan966x_fdma_rx_disable(struct lan966x_rx *rx)
 		lan966x, FDMA_CH_DB_DISCARD);
 }
 
-static void lan966x_fdma_rx_reload(struct lan966x_rx *rx)
+void lan966x_fdma_rx_reload(struct lan966x_rx *rx)
 {
 	struct lan966x *lan966x = rx->lan966x;
 
@@ -230,8 +230,8 @@ static void lan966x_fdma_rx_reload(struct lan966x_rx *rx)
 		lan966x, FDMA_CH_RELOAD);
 }
 
-static void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx,
-				    struct lan966x_tx_dcb *dcb)
+void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx,
+			     struct lan966x_tx_dcb *dcb)
 {
 	dcb->nextptr = FDMA_DCB_INVALID_DATA;
 	dcb->info = 0;
@@ -289,7 +289,7 @@ static void lan966x_fdma_tx_free(struct lan966x_tx *tx)
 	dma_free_coherent(lan966x->dev, size, tx->dcbs, tx->dma);
 }
 
-static void lan966x_fdma_tx_activate(struct lan966x_tx *tx)
+void lan966x_fdma_tx_activate(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
 	u32 mask;
@@ -327,7 +327,7 @@ static void lan966x_fdma_tx_activate(struct lan966x_tx *tx)
 		lan966x, FDMA_CH_ACTIVATE);
 }
 
-static void lan966x_fdma_tx_disable(struct lan966x_tx *tx)
+void lan966x_fdma_tx_disable(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
 	u32 val;
@@ -349,7 +349,7 @@ static void lan966x_fdma_tx_disable(struct lan966x_tx *tx)
 	tx->last_in_use = -1;
 }
 
-static void lan966x_fdma_tx_reload(struct lan966x_tx *tx)
+void lan966x_fdma_tx_reload(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
 
@@ -359,7 +359,7 @@ static void lan966x_fdma_tx_reload(struct lan966x_tx *tx)
 		lan966x, FDMA_CH_RELOAD);
 }
 
-static void lan966x_fdma_wakeup_netdev(struct lan966x *lan966x)
+void lan966x_fdma_wakeup_netdev(struct lan966x *lan966x)
 {
 	struct lan966x_port *port;
 	int i;
@@ -374,7 +374,7 @@ static void lan966x_fdma_wakeup_netdev(struct lan966x *lan966x)
 	}
 }
 
-static void lan966x_fdma_stop_netdev(struct lan966x *lan966x)
+void lan966x_fdma_stop_netdev(struct lan966x *lan966x)
 {
 	struct lan966x_port *port;
 	int i;
@@ -449,7 +449,7 @@ static void lan966x_fdma_tx_clear_buf(struct lan966x *lan966x, int weight)
 	spin_unlock_irqrestore(&lan966x->tx_lock, flags);
 }
 
-static bool lan966x_fdma_rx_more_frames(struct lan966x_rx *rx)
+bool lan966x_fdma_rx_more_frames(struct lan966x_rx *rx)
 {
 	struct lan966x_db *db;
 
@@ -542,7 +542,7 @@ free_page:
 	return NULL;
 }
 
-static int lan966x_fdma_napi_poll(struct napi_struct *napi, int weight)
+int lan966x_fdma_napi_poll(struct napi_struct *napi, int weight)
 {
 	struct lan966x *lan966x = container_of(napi, struct lan966x, napi);
 	struct lan966x_rx *rx = &lan966x->rx;
@@ -647,7 +647,7 @@ irqreturn_t lan966x_fdma_irq_handler(int irq, void *args)
 	return IRQ_HANDLED;
 }
 
-static int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx)
+int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx)
 {
 	struct lan966x_tx_dcb_buf *dcb_buf;
 	int i;
@@ -900,7 +900,7 @@ static int lan966x_fdma_get_max_mtu(struct lan966x *lan966x)
 	return max_mtu;
 }
 
-static int lan966x_qsys_sw_status(struct lan966x *lan966x)
+int lan966x_qsys_sw_status(struct lan966x *lan966x)
 {
 	return lan_rd(lan966x, QSYS_SW_STATUS(CPU_PORT));
 }
@@ -950,7 +950,7 @@ restore:
 	return err;
 }
 
-static int lan966x_fdma_get_max_frame(struct lan966x *lan966x)
+int lan966x_fdma_get_max_frame(struct lan966x *lan966x)
 {
 	return lan966x_fdma_get_max_mtu(lan966x) +
 	       IFH_LEN_BYTES +

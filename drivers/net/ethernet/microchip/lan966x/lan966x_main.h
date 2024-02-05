@@ -816,6 +816,21 @@ int lan966x_fdma_init(struct lan966x *lan966x);
 void lan966x_fdma_deinit(struct lan966x *lan966x);
 irqreturn_t lan966x_fdma_irq_handler(int irq, void *args);
 int lan966x_fdma_reload_page_pool(struct lan966x *lan966x);
+void lan966x_fdma_wakeup_netdev(struct lan966x *lan966x);
+bool lan966x_fdma_rx_more_frames(struct lan966x_rx *rx);
+void lan966x_fdma_rx_advance_dcb(struct lan966x_rx *rx);
+void lan966x_fdma_rx_reload(struct lan966x_rx *rx);
+int lan966x_fdma_get_max_frame(struct lan966x *lan966x);
+void lan966x_fdma_rx_start(struct lan966x_rx *rx);
+void lan966x_fdma_rx_disable(struct lan966x_rx *rx);
+void lan966x_fdma_tx_disable(struct lan966x_tx *tx);
+void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx, struct lan966x_tx_dcb *dcb);
+int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx);
+void lan966x_fdma_stop_netdev(struct lan966x *lan966x);
+int lan966x_qsys_sw_status(struct lan966x *lan966x);
+void lan966x_fdma_tx_reload(struct lan966x_tx *tx);
+void lan966x_fdma_tx_activate(struct lan966x_tx *tx);
+int lan966x_fdma_napi_poll(struct napi_struct *napi, int weight);
 
 int lan966x_lag_port_join(struct lan966x_port *port,
 			  struct net_device *brport_dev,
