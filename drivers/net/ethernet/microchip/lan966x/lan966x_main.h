@@ -100,7 +100,7 @@
 
 #define FDMA_XTR_CHANNEL		6
 #define FDMA_INJ_CHANNEL		0
-#define FDMA_DCB_MAX			512
+#define FDMA_DCB_MAX			512 /* Must be a power of 2 */
 
 #define SE_IDX_QUEUE			0  /* 0-79 : Queue scheduler elements */
 #define SE_IDX_PORT			80 /* 80-89 : Port schedular elements */
@@ -848,6 +848,10 @@ int lan966x_qsys_sw_status(struct lan966x *lan966x);
 void lan966x_fdma_tx_reload(struct lan966x_tx *tx);
 void lan966x_fdma_tx_activate(struct lan966x_tx *tx);
 int lan966x_fdma_napi_poll(struct napi_struct *napi, int weight);
+
+#ifdef CONFIG_MFD_LAN966X_PCI
+extern const struct lan966x_match_data lan966x_pci_desc;
+#endif
 
 int lan966x_lag_port_join(struct lan966x_port *port,
 			  struct net_device *brport_dev,

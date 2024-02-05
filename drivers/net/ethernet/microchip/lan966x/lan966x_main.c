@@ -1409,6 +1409,9 @@ static const struct lan966x_match_data lan966x_desc = {
 
 static const struct of_device_id lan966x_match[] = {
 	{ .compatible = "microchip,lan966x-switch", .data = &lan966x_desc },
+#ifdef CONFIG_MFD_LAN966X_PCI
+	{ .compatible = "microchip,lan966x-pci-switch", .data = &lan966x_pci_desc },
+#endif
 	{ }
 };
 MODULE_DEVICE_TABLE(of, lan966x_match);
