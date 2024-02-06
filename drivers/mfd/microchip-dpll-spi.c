@@ -16,13 +16,13 @@
 #define MICROCHIP_DPLL_LOWER_ADDR_MASK		0x007F
 
 static const struct spi_device_id microchip_dpll_spi_id[] = {
-	{ "zl80732",  },
+	{ "zl80732-spi",  },
 	{}
 };
 MODULE_DEVICE_TABLE(spi, microchip_dpll_spi_id);
 
 static const struct of_device_id microchip_dpll_spi_of_match[] = {
-	{ .compatible = "microchip,zl80732" },
+	{ .compatible = "microchip,zl80732-spi" },
 	{}
 };
 MODULE_DEVICE_TABLE(of, microchip_dpll_spi_of_match);
