@@ -408,7 +408,6 @@ struct sparx5 {
 	int xtr_irq;
 	/* Frame DMA */
 	int fdma_irq;
-	spinlock_t tx_lock; /* lock for frame transmition */
 	struct sparx5_rx rx;
 	struct sparx5_tx tx;
 	/* PTP */
