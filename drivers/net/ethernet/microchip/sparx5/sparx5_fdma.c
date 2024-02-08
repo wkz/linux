@@ -312,14 +312,28 @@ int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 	struct sparx5_db_hw *db_hw;
 	struct sparx5_db *db;
 
+	if (skb_put_padto(skb, ETH_ZLEN))
+		return NETDEV_TX_OK;
+
 	next_dcb_hw = sparx5_fdma_next_dcb(tx, tx->curr_entry);
 	db_hw = &next_dcb_hw->db[0];
 
-	if (!(db_hw->status & FDMA_DCB_STATUS_DONE))
-		return -EINVAL;
+	if (!(db_hw->status & FDMA_DCB_STATUS_DONE)) {
+		while (true) {
+			next_dcb_hw++;
+			if ((unsigned long)next_dcb_hw >= ((unsigned long)tx->first_entry +
+							   FDMA_DCB_MAX * sizeof(*next_dcb_hw)))
+				next_dcb_hw = tx->first_entry;
 
-	if (skb_put_padto(skb, ETH_ZLEN))
-		return NETDEV_TX_OK;
+			/* Skip the unfinished db */
+			db = list_first_entry(&tx->db_list, struct sparx5_db, list);
+			list_move_tail(&db->list, &tx->db_list);
+
+			db_hw = &next_dcb_hw->db[0];
+			if (db_hw->status & FDMA_DCB_STATUS_DONE)
+				break;
+		}
+	}
 
 	db = list_first_entry(&tx->db_list, struct sparx5_db, list);
 	list_move_tail(&db->list, &tx->db_list);
