@@ -462,6 +462,8 @@ static void dsa_port_bridge_destroy(struct dsa_port *dp,
 	struct dsa_bridge *bridge = dp->bridge;
 
 	dp->bridge = NULL;
+	pr_emerg("WKZ dp(%s)->bridge = NULL", dp->user ? netdev_name(dp->user) : "<INTERNAL>");
+	dump_stack();
 
 	if (!refcount_dec_and_test(&bridge->refcount))
 		return;
@@ -1276,9 +1278,16 @@ int dsa_port_bridge_host_mdb_del(const struct dsa_port *dp,
 	struct net_device *conduit = dsa_port_to_conduit(dp);
 	struct dsa_db db = {
 		.type = DSA_DB_BRIDGE,
-		.bridge = *dp->bridge,
+		/* .bridge = *dp->bridge, */
 	};
 	int err;
+
+	if (!dp->bridge) {
+		pr_emerg("WKZ WILL BORK ON dp(%s)->bridge == NULL", dp->user ? netdev_name(dp->user) : "<INTERNAL>");
+		dump_stack();
+	}
+
+	db.bridge = *dp->bridge;
 
 	if (!dp->ds->fdb_isolation)
 		db.bridge.num = 0;

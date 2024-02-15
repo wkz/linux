@@ -194,8 +194,13 @@ verify_port()
 	done
 }
 
+WKZ=31000
 verify()
 {
+	ip link set dev br0 type bridge ageing_time $WKZ
+	WKZ=$((WKZ + 1000))
+	mvls
+
 	tcpdump_start $oh
 	tcpdump_start $rh
 
@@ -327,6 +332,11 @@ cleanup()
 
 	tcpdump_cleanup $oh
 	tcpdump_cleanup $rh
+
+	for iface in $b1 $b2 $b3; do #WKZ
+		ip link set dev $iface nomaster
+	done
+	ip link set dev br0 type bridge ageing_time $WKZ
 
 	ip link del dev br0
 
