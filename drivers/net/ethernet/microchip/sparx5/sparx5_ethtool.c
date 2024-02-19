@@ -1286,7 +1286,7 @@ const struct ethtool_ops sparx5_ethtool_ops = {
 	.get_ts_info            = sparx5_get_ts_info,
 };
 
-int sparx_stats_init(struct sparx5 *sparx5)
+int sparx5_stats_init(struct sparx5 *sparx5)
 {
 	const struct sparx5_consts *consts = &sparx5->data->consts;
 	char queue_name[32];

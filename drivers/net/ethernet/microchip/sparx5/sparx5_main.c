@@ -728,7 +728,7 @@ static int sparx5_start(struct sparx5 *sparx5)
 		return err;
 
 	/* Init stats */
-	err = sparx_stats_init(sparx5);
+	err = sparx5_stats_init(sparx5);
 	if (err)
 		return err;
 
