@@ -869,6 +869,7 @@ int sparx5_policer_stats_update(struct sparx5 *sparx5,
 				struct sparx5_policer *pol);
 
 int sparx5_policer_conf_set(struct sparx5 *sparx5, struct sparx5_policer *pol);
+void sparx5_policer_reset_counters(struct sparx5 *sparx5);
 
 /* sparx5_psfp.c */
 #define SPX5_PSFP_SF_CNT 1024

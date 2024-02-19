@@ -185,6 +185,21 @@ int sparx5_policer_conf_set(struct sparx5 *sparx5,
 	return 0;
 }
 
+void sparx5_policer_reset_counters(struct sparx5 *sparx5)
+{
+	int value;
+
+	/* Reset port policer statistics */
+	spx5_rmw(ANA_AC_STAT_RESET_RESET_SET(1),
+		 ANA_AC_STAT_RESET_RESET,
+		 sparx5, ANA_AC_STAT_RESET);
+
+	/* Wait for policer statistics reset to complete */
+	read_poll_timeout(spx5_rd, value,
+			  !ANA_AC_STAT_RESET_RESET_GET(value),
+			  500, 10000, false, sparx5, ANA_AC_STAT_RESET);
+}
+
 int sparx5_policer_init(struct sparx5 *sparx5)
 {
 	const struct sparx5_consts *consts = &sparx5->data->consts;
@@ -245,16 +260,6 @@ int sparx5_policer_init(struct sparx5 *sparx5)
 		SPX5_PORT_POLICER_2_PASS_EVENT |
 		SPX5_PORT_POLICER_3_PASS_EVENT,
 		sparx5, ANA_AC_PORT_SGE_CFG(SPX5_PORT_POLICER_PASS_COUNTER));
-
-	/* Reset port policer statistics */
-	spx5_rmw(ANA_AC_STAT_RESET_RESET_SET(1),
-		 ANA_AC_STAT_RESET_RESET,
-		 sparx5, ANA_AC_STAT_RESET);
-
-	/* Wait for policer statistics reset to complete */
-	read_poll_timeout(spx5_rd, value,
-			  !ANA_AC_STAT_RESET_RESET_GET(value),
-			  500, 10000, false, sparx5, ANA_AC_STAT_RESET);
 
 	return sparx5_policer_conf_set(sparx5, &pol);
 }

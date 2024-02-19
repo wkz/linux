@@ -1301,6 +1301,8 @@ int sparx5_stats_init(struct sparx5 *sparx5)
 	if (!sparx5->stats)
 		return -ENOMEM;
 
+	sparx5_policer_reset_counters(sparx5);
+
 	mutex_init(&sparx5->queue_stats_lock);
 	sparx5_config_stats(sparx5);
 	for (portno = 0; portno < consts->chip_ports; portno++)
