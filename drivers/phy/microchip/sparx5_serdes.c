@@ -1164,7 +1164,7 @@ static void sparx5_serdes_cmu_power_off(struct sparx5_serdes_private *priv)
 			      SD_CMU_CMU_06(0));
 	}
 
-	for (i = i; i < SPX5_SERDES_25G_CNT; i++) {
+	for (i = 0; i < SPX5_SERDES_25G_CNT; i++) {
 		sdx5_rmw(SD_LANE_25G_SD_LANE_CFG_EXT_CFG_RST_SET(1),
 			      SD_LANE_25G_SD_LANE_CFG_EXT_CFG_RST,
 			      priv, SD_LANE_25G_SD_LANE_CFG(i));
