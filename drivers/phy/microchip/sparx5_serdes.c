@@ -1089,7 +1089,7 @@ sparx5_serdes_cmu_map[SPX5_SD10G28_CMU_MAX][SPX5_SERDES_25G_START] = {
 /* Sparx5 - Get the index of the CMU which provides the clock for the specified
  * serdes mode and index.
  */
-static int sparx5_serdes_cmu_get(enum sparx5_10g28cmu_mode mode, int sd_index)
+static const int sparx5_serdes_cmu_get(enum sparx5_10g28cmu_mode mode, int sd_index)
 {
 	return sparx5_serdes_cmu_map[mode][sd_index];
 }
