@@ -1672,7 +1672,7 @@ static const u32 sparx5_hsch_max_group_rate[SPX5_HSCH_LEAK_GRP_CNT] = {
 	1048568, 2621420, 10485680, 26214200
 };
 
-u32 sparx5_get_hsch_max_group_rate(int grp)
+const u32 sparx5_get_hsch_max_group_rate(int grp)
 {
 	return sparx5_hsch_max_group_rate[grp];
 }
