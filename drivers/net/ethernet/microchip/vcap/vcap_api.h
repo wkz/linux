@@ -77,6 +77,12 @@ struct vcap_set {
 	u8 sw_cnt;
 };
 
+/* VCAP typegroup header data */
+struct vcap_typegroup_hdr {
+	u16 tg_width;
+	u16 type_width;
+};
+
 /* VCAP typegroup position and bitvalue */
 struct vcap_typegroup {
 	u16 offset;
@@ -111,6 +117,10 @@ struct vcap_info {
 	const struct vcap_typegroup **keyfield_set_typegroups;
 	/* map of actionset typegroups per subword size */
 	const struct vcap_typegroup **actionfield_set_typegroups;
+	/* map of keyset typegroup header data per subword size */
+	const struct vcap_typegroup_hdr *keyfield_set_typegroup_hdrs;
+	/* map of actionfield typegroup header data per subword size */
+	const struct vcap_typegroup_hdr *actionfield_set_typegroup_hdrs;
 };
 
 enum vcap_field_type {
