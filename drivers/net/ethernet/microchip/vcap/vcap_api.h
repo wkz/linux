@@ -22,7 +22,7 @@
 #define VCAP_CID_INGRESS_L5          1500000 /* Ingress Stage 1 Lookup 5 */
 
 #define VCAP_CID_PREROUTING_IPV6     3000000 /* Prerouting Stage */
-#define VCAP_CID_PREROUTING          6000000 /* Prerouting Stage */
+#define VCAP_CID_PREROUTING_L0       6000000 /* Prerouting Stage Lookup 0 */
 
 #define VCAP_CID_INGRESS_STAGE2_L0   8000000 /* Ingress Stage 2 Lookup 0 */
 #define VCAP_CID_INGRESS_STAGE2_L1   8100000 /* Ingress Stage 2 Lookup 1 */
