@@ -394,6 +394,8 @@ static int mchp_sparx5_appl_probe(struct platform_device *pdev)
 		return err;
 
 	sparx5->chip_id = spx5_rd(sparx5, GCB_CHIP_ID);
+	sparx5->target_ct = (enum spx5_target_chiptype)
+		GCB_CHIP_ID_PART_ID_GET(sparx5->chip_id);
 
 	dev = alloc_etherdev_mqs(sizeof(struct sparx5_port), 8, 1);
 	if (!dev)
