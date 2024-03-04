@@ -81,10 +81,10 @@ netdev_tx_t br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	dest = eth_hdr(skb)->h_dest;
 	if (is_broadcast_ether_addr(dest)) {
-		br_flood(br, skb, BR_PKT_BROADCAST, false, true, vid);
+		br_flood(br, skb, NULL, BR_PKT_BROADCAST, false, true, vid);
 	} else if (is_multicast_ether_addr(dest)) {
 		if (unlikely(netpoll_tx_running(dev))) {
-			br_flood(br, skb, BR_PKT_MULTICAST, false, true, vid);
+			br_flood(br, skb, brmctx, BR_PKT_MULTICAST, false, true, vid);
 			goto out;
 		}
 		if (br_multicast_rcv(&brmctx, &pmctx_null, vlan, skb, vid)) {
@@ -97,11 +97,11 @@ netdev_tx_t br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 		    br_multicast_querier_exists(brmctx, eth_hdr(skb), mdst))
 			br_multicast_flood(mdst, skb, brmctx, false, true);
 		else
-			br_flood(br, skb, BR_PKT_MULTICAST, false, true, vid);
+			br_flood(br, skb, brmctx, BR_PKT_MULTICAST, false, true, vid);
 	} else if ((dst = br_fdb_find_rcu(br, dest, vid)) != NULL) {
 		br_forward(dst->dst, skb, false, true);
 	} else {
-		br_flood(br, skb, BR_PKT_UNICAST, false, true, vid);
+		br_flood(br, skb, NULL, BR_PKT_UNICAST, false, true, vid);
 	}
 out:
 	rcu_read_unlock();
@@ -530,6 +530,8 @@ void br_dev_setup(struct net_device *dev)
 	br->bridge_forward_delay = br->forward_delay = 15 * HZ;
 	br->bridge_ageing_time = br->ageing_time = BR_DEFAULT_AGEING_TIME;
 	dev->max_mtu = ETH_MAX_MTU;
+
+	br_opt_toggle(br, BROPT_MCAST_FLOOD_ALWAYS, false);
 
 	br_netfilter_rtable_init(br);
 	br_stp_timer_init(br);

@@ -3775,6 +3775,11 @@ static void br_multicast_err_count(const struct net_bridge *br,
 	u64_stats_update_end(&pstats->syncp);
 }
 
+static bool br_flood_mrouters(const struct net_bridge *br)
+{
+	return br_opt_get(br, BROPT_MCAST_FLOOD_ALWAYS) ? false : true;
+}
+
 static void br_multicast_pim(struct net_bridge_mcast *brmctx,
 			     struct net_bridge_mcast_port *pmctx,
 			     const struct sk_buff *skb)
@@ -3821,7 +3826,8 @@ static int br_multicast_ipv4_rcv(struct net_bridge_mcast *brmctx,
 
 	if (err == -ENOMSG) {
 		if (!ipv4_is_local_multicast(ip_hdr(skb)->daddr)) {
-			BR_INPUT_SKB_CB(skb)->mrouters_only = 1;
+			BR_INPUT_SKB_CB(skb)->mrouters_only =
+				br_flood_mrouters(brmctx->br);
 		} else if (pim_ipv4_all_pim_routers(ip_hdr(skb)->daddr)) {
 			if (ip_hdr(skb)->protocol == IPPROTO_PIM)
 				br_multicast_pim(brmctx, pmctx, skb);
@@ -3890,7 +3896,8 @@ static int br_multicast_ipv6_rcv(struct net_bridge_mcast *brmctx,
 
 	if (err == -ENOMSG || err == -ENODATA) {
 		if (!ipv6_addr_is_ll_all_nodes(&ipv6_hdr(skb)->daddr))
-			BR_INPUT_SKB_CB(skb)->mrouters_only = 1;
+			BR_INPUT_SKB_CB(skb)->mrouters_only =
+				br_flood_mrouters(brmctx->br);
 		if (err == -ENODATA &&
 		    ipv6_addr_is_all_snoopers(&ipv6_hdr(skb)->daddr))
 			br_ip6_multicast_mrd_rcv(brmctx, pmctx, skb);

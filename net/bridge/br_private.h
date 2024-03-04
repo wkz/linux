@@ -480,6 +480,7 @@ enum net_bridge_opts {
 	BROPT_VLAN_BRIDGE_BINDING,
 	BROPT_MCAST_VLAN_SNOOPING_ENABLED,
 	BROPT_MST_ENABLED,
+	BROPT_MCAST_FLOOD_ALWAYS,
 };
 
 struct net_bridge {
@@ -880,8 +881,8 @@ void br_forward(const struct net_bridge_port *to, struct sk_buff *skb,
 		bool local_rcv, bool local_orig);
 int br_forward_finish(struct net *net, struct sock *sk, struct sk_buff *skb);
 void br_flood(struct net_bridge *br, struct sk_buff *skb,
-	      enum br_pkt_type pkt_type, bool local_rcv, bool local_orig,
-	      u16 vid);
+	      struct net_bridge_mcast *brmctx, enum br_pkt_type pkt_type,
+	      bool local_rcv, bool local_orig, u16 vid);
 
 /* return true if both source port and dest port are isolated */
 static inline bool br_skb_isolated(const struct net_bridge_port *to,
@@ -1394,6 +1395,19 @@ static inline void br_multicast_flood(struct net_bridge_mdb_entry *mdst,
 				      struct net_bridge_mcast *brmctx,
 				      bool local_rcv, bool local_orig)
 {
+}
+
+static inline struct hlist_node *
+br_multicast_get_first_rport_node(struct net_bridge_mcast *brmctx,
+				  struct sk_buff *skb)
+{
+	return NULL;
+}
+
+static inline struct net_bridge_port *
+br_multicast_rport_from_node_skb(struct hlist_node *rp, struct sk_buff *skb)
+{
+	return NULL;
 }
 
 static inline bool br_multicast_is_router(struct net_bridge_mcast *brmctx,

@@ -198,13 +198,18 @@ out:
 
 /* called under rcu_read_lock */
 void br_flood(struct net_bridge *br, struct sk_buff *skb,
-	      enum br_pkt_type pkt_type, bool local_rcv, bool local_orig,
-	      u16 vid)
+	      struct net_bridge_mcast *brmctx, enum br_pkt_type pkt_type,
+	      bool local_rcv, bool local_orig, u16 vid)
 {
+	struct net_bridge_port *rport = NULL;
 	struct net_bridge_port *prev = NULL;
+	struct hlist_node *rp = NULL;
 	struct net_bridge_port *p;
 
 	br_tc_skb_miss_set(skb, pkt_type != BR_PKT_BROADCAST);
+
+	if (pkt_type == BR_PKT_MULTICAST)
+		rp = br_multicast_get_first_rport_node(brmctx, skb);
 
 	list_for_each_entry_rcu(p, &br->port_list, list) {
 		/* Do not flood unicast traffic to ports that turn it off, nor
@@ -216,6 +221,11 @@ void br_flood(struct net_bridge *br, struct sk_buff *skb,
 				continue;
 			break;
 		case BR_PKT_MULTICAST:
+			rport = br_multicast_rport_from_node_skb(rp, skb);
+			if (rport == p) {
+				rp = rcu_dereference(hlist_next_rcu(rp));
+				break;
+			}
 			if (!(p->flags & BR_MCAST_FLOOD) && skb->dev != br->dev)
 				continue;
 			break;
