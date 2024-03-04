@@ -80,7 +80,7 @@ static void sparx5_fdma_tx_add_dcb(struct sparx5_tx *tx,
 		db->status = FDMA_DCB_STATUS_DONE;
 	}
 	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = FDMA_DCB_INFO_DATAL(FDMA_XTR_BUFFER_SIZE);
+	dcb->info = FDMA_DCB_INFO_DATAL(tx->max_mtu);
 }
 
 void sparx5_fdma_rx_activate(struct sparx5 *sparx5, struct sparx5_rx *rx)
@@ -342,7 +342,7 @@ int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 		((unsigned long)next_dcb_hw -
 		 (unsigned long)tx->first_entry);
 	tx->curr_entry = next_dcb_hw;
-	memset(db->cpu_addr, 0, FDMA_XTR_BUFFER_SIZE);
+	memset(db->cpu_addr, 0, skb->len);
 	memcpy(db->cpu_addr, ifh, IFH_LEN * 4);
 	memcpy(db->cpu_addr + IFH_LEN * 4, skb->data, skb->len);
 	db_hw->status = FDMA_DCB_STATUS_SOF |
@@ -433,7 +433,7 @@ static int sparx5_fdma_tx_alloc(struct sparx5 *sparx5)
 			void *cpu_addr;
 
 			cpu_addr = devm_kzalloc(sparx5->dev,
-						FDMA_XTR_BUFFER_SIZE,
+						tx->max_mtu,
 						GFP_KERNEL);
 			if (!cpu_addr)
 				return -ENOMEM;
