@@ -310,7 +310,7 @@ static void sparx5_fdma_tx_add_dcb(struct sparx5_tx *tx,
 		db->status = FDMA_DCB_STATUS_DONE;
 	}
 	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = FDMA_DCB_INFO_DATAL(FDMA_XTR_BUFFER_SIZE);
+	dcb->info = FDMA_DCB_INFO_DATAL(tx->max_mtu);
 }
 
 static int lan969x_fdma_tx_alloc(struct sparx5 *sparx5)
@@ -339,13 +339,13 @@ static int lan969x_fdma_tx_alloc(struct sparx5 *sparx5)
 			void *cpu_addr;
 
 			cpu_addr = devm_kzalloc(sparx5->dev,
-						FDMA_XTR_BUFFER_SIZE,
+						tx->max_mtu,
 						GFP_KERNEL);
 			if (!cpu_addr)
 				return -ENOMEM;
 
 			dma_addr = dma_map_single(sparx5->dev, cpu_addr,
-						  FDMA_XTR_BUFFER_SIZE,
+						  tx->max_mtu,
 						  DMA_BIDIRECTIONAL);
 			if (dma_mapping_error(sparx5->dev, dma_addr))
 				return -ENOMEM;
@@ -428,7 +428,7 @@ int lan969x_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 	db_hw = &next_dcb_hw->db[0];
 
 	dma_sync_single_for_cpu(sparx5->dev, db_hw->dataptr,
-				FDMA_XTR_BUFFER_SIZE, DMA_BIDIRECTIONAL);
+				skb->len + IFH_LEN * 4 + 4, DMA_BIDIRECTIONAL);
 	if (!(db_hw->status & FDMA_DCB_STATUS_DONE))
 		return -EINVAL;
 	db = list_first_entry(&tx->db_list, struct sparx5_db, list);
@@ -438,7 +438,7 @@ int lan969x_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 		((unsigned long)next_dcb_hw -
 		 (unsigned long)tx->first_entry);
 	tx->curr_entry = next_dcb_hw;
-	memset(db->cpu_addr, 0, FDMA_XTR_BUFFER_SIZE);
+	memset(db->cpu_addr, 0, skb->len);
 	memcpy(db->cpu_addr, ifh, IFH_LEN * 4);
 	memcpy(db->cpu_addr + IFH_LEN * 4, skb->data, skb->len);
 	db_hw->status = FDMA_DCB_STATUS_SOF |
@@ -446,7 +446,8 @@ int lan969x_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 			FDMA_DCB_STATUS_BLOCKO(0) |
 			FDMA_DCB_STATUS_BLOCKL(skb->len + IFH_LEN * 4 + 4);
 	dma_sync_single_for_device(sparx5->dev, db_hw->dataptr,
-				   FDMA_XTR_BUFFER_SIZE, DMA_BIDIRECTIONAL);
+				   skb->len + IFH_LEN * 4 + 4,
+				   DMA_BIDIRECTIONAL);
 	if (first_time) {
 		sparx5_fdma_tx_activate(sparx5, tx);
 		first_time = false;

@@ -227,6 +227,7 @@ struct sparx5_tx {
 	u32 channel_id;
 	u64 packets;
 	u64 dropped;
+	u16 max_mtu;
 };
 
 struct sparx5_port_config {

@@ -476,7 +476,21 @@ EXPORT_SYMBOL_GPL(sparx5_fdma_rx_init);
 void sparx5_fdma_tx_init(struct sparx5 *sparx5, struct sparx5_tx *tx,
 			 int channel)
 {
+	const struct sparx5_consts *consts = &sparx5->data->consts;
+	int idx;
+
 	tx->channel_id = channel;
+
+	/* Fetch a netdev for SKB and NAPI use, any will do */
+	for (idx = 0; idx < consts->chip_ports; ++idx) {
+		struct sparx5_port *port = sparx5->ports[idx];
+
+		if (port && port->ndev) {
+			tx->max_mtu = port->ndev->mtu;
+			tx->max_mtu += ETH_ALEN + IFH_LEN * 4 + 4;
+			break;
+		}
+	}
 }
 EXPORT_SYMBOL_GPL(sparx5_fdma_tx_init);
 
