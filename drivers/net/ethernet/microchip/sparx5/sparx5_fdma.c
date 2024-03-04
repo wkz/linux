@@ -62,7 +62,7 @@ static void sparx5_fdma_rx_add_dcb(struct sparx5 *sparx5, struct sparx5_rx *rx,
 		db->status = FDMA_DCB_STATUS_INTR;
 	}
 	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = FDMA_DCB_INFO_DATAL(FDMA_XTR_BUFFER_SIZE);
+	dcb->info = FDMA_DCB_INFO_DATAL(PAGE_SIZE << rx->page_order);
 	rx->last_entry->nextptr = nextptr;
 	rx->last_entry = dcb;
 }
@@ -178,7 +178,7 @@ EXPORT_SYMBOL_GPL(sparx5_fdma_tx_reload);
 
 static struct sk_buff *sparx5_fdma_rx_alloc_skb(struct sparx5_rx *rx)
 {
-	return __netdev_alloc_skb(rx->ndev, FDMA_XTR_BUFFER_SIZE,
+	return __netdev_alloc_skb(rx->ndev, PAGE_SIZE << rx->page_order,
 				  GFP_ATOMIC);
 }
 

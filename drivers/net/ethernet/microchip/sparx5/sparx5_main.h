@@ -133,7 +133,6 @@ extern const u8 ifh_smac[];
 #define FDMA_DCB_STATUS_BLOCKO(x)	(((x) << 20) & GENMASK(31, 20))
 #define FDMA_DCB_INVALID_DATA		0x1
 
-#define FDMA_XTR_BUFFER_SIZE		2048
 #define FDMA_WEIGHT			4
 
 #define SPARX5_PHC_COUNT		3
