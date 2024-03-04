@@ -356,6 +356,17 @@ static int sparx5_appl_fdma(struct sparx5 *sparx5)
 	if (err)
 		return err;
 
+	/* Increase the page size for the pages that are allocated for the
+	 * received DB. This affects only the lan969x when used with the APPL.
+	 * The issue is that the mtu is set to IF_BUFSIZE_JUMBO which is bigger
+	 * than one page, that means when we receive a frame bigger than one
+	 * page (because mtu is configured to accept that) then the kernel will
+	 * crash because the allocated page for received frames is only 1 page.
+	 * Therefore increase the page order to be 2, that means the pages will
+	 * have a size of 4096 << 2.
+	 */
+	sparx5->rx.page_order = 2;
+
 	return sparx5->data->ops.fdma_start(sparx5);
 }
 
