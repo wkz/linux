@@ -1075,7 +1075,10 @@ br_multicast_get_first_rport_node(struct net_bridge_mcast *brmctx,
 	if (skb->protocol == htons(ETH_P_IPV6))
 		return rcu_dereference(hlist_first_rcu(&brmctx->ip6_mc_router_list));
 #endif
-	return rcu_dereference(hlist_first_rcu(&brmctx->ip4_mc_router_list));
+	if (skb->protocol == htons(ETH_P_IP))
+		return rcu_dereference(hlist_first_rcu(&brmctx->ip4_mc_router_list));
+
+	return NULL;
 }
 
 static inline struct net_bridge_port *
