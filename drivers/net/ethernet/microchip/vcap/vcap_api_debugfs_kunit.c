@@ -365,8 +365,12 @@ static void vcap_api_show_admin_raw_test(struct kunit *test)
 	struct vcap_output_print out = {
 		.prf = (void *)test_prf,
 	};
-	const char *test_expected =
+	const char *test_expected_0 =
 		"  addr: 786, X6 rule, keysets: VCAP_KFS_MAC_ETYPE\n";
+	const char *test_expected_1 =
+		"      keystream[0,...]=[0b01000000010001010000000001000010,0b00000000000011111110101011110011]\n";
+	const char *test_expected_2 =
+		"     maskstream[0,...]=[0b11111111110011110000000001111111,0b00000000000011111111111111111111]\n";
 	int ret;
 
 	vcap_test_api_init(&admin);
@@ -374,7 +378,9 @@ static void vcap_api_show_admin_raw_test(struct kunit *test)
 
 	ret = vcap_show_admin_raw(&test_vctrl, &admin, &out);
 	KUNIT_EXPECT_EQ(test, 0, ret);
-	KUNIT_EXPECT_STREQ(test, test_expected, test_pr_buffer[0]);
+	KUNIT_EXPECT_STREQ(test, test_expected_0, test_pr_buffer[0]);
+	KUNIT_EXPECT_STREQ(test, test_expected_1, test_pr_buffer[1]);
+	KUNIT_EXPECT_STREQ(test, test_expected_2, test_pr_buffer[2]);
 }
 
 static const char * const test_admin_info_expect[] = {

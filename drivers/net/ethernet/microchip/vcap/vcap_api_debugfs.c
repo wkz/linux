@@ -5,6 +5,9 @@
  *
  */
 
+#include <linux/kernel.h>
+#include <linux/seq_buf.h>
+
 #include "vcap_api_private.h"
 #include "vcap_api_debugfs.h"
 
@@ -16,6 +19,88 @@ struct vcap_admin_debugfs_info {
 struct vcap_port_debugfs_info {
 	struct vcap_control *vctrl;
 	struct net_device *ndev;
+};
+
+/* Write binary representation of word to s */
+static int vcap_debugfs_word_to_bin(struct seq_buf *s, u32 word)
+{
+	u32 mask = MSB_32_MASK;
+	int err;
+
+	if (seq_buf_buffer_left(s) < 35)
+		return -1;
+
+	err = seq_buf_puts(s, "0b");
+	if (err < 0)
+		return err;
+
+	while (mask != 0) {
+		err = seq_buf_putc(s, (word & mask) == 0 ? '0' : '1');
+		if (err < 0)
+			return err;
+		mask >>= 1;
+	}
+
+	seq_buf_terminate(s);
+
+	return 0;
+};
+
+static void vcap_debugfs_raw_stream_fmt(struct seq_buf *dst, u32 *stream,
+					u32 words)
+{
+	struct seq_buf binstr;
+	char binbuf[35];
+	char *fmtstr;
+	int err;
+
+	if (words <= 0)
+		return;
+
+	seq_buf_init(&binstr, binbuf, ARRAY_SIZE(binbuf));
+
+	err = seq_buf_printf(dst, "[");
+	if (err < 0)
+		return;
+
+	for (int idx = 0; idx < words; idx++) {
+		if (vcap_debugfs_word_to_bin(&binstr, stream[idx]) < 0)
+			break;
+		fmtstr = idx == (words - 1) ? "%s]" : "%s,";
+		err = seq_buf_printf(dst, fmtstr, binstr.buffer);
+		if (err < 0)
+			return;
+		seq_buf_clear(&binstr);
+	}
+	return;
+};
+
+static void vcap_debugfs_show_raw_streams(struct vcap_control *vctrl,
+					  struct vcap_admin *admin,
+					  struct vcap_output_print *out)
+{
+	enum vcap_type vt = admin->vtype;
+	struct seq_buf streambufs;
+	char streambuf[256];
+	int keyset_sw_regs;
+
+	seq_buf_init(&streambufs, streambuf, ARRAY_SIZE(streambuf));
+	keyset_sw_regs = DIV_ROUND_UP(vctrl->vcaps[vt].sw_width, 32);
+
+	vcap_debugfs_raw_stream_fmt(&streambufs, admin->cache.keystream,
+				    keyset_sw_regs);
+	seq_buf_terminate(&streambufs);
+	out->prf(out->dst, "\n%22.s=%s", "keystream[0,...]", streambufs.buffer);
+	seq_buf_clear(&streambufs);
+
+	vcap_debugfs_raw_stream_fmt(&streambufs, admin->cache.maskstream,
+				    keyset_sw_regs);
+	seq_buf_terminate(&streambufs);
+	out->prf(out->dst, "\n%22.s=%s", "maskstream[0,...]",
+		 streambufs.buffer);
+	seq_buf_clear(&streambufs);
+
+	return;
 };
 
 /* Dump the keyfields value and mask values */
@@ -358,6 +443,7 @@ static int vcap_show_admin_raw(struct vcap_control *vctrl,
 				out->prf(out->dst, " %s",
 					 vcap_keyset_name(vctrl,
 							  kslist.keysets[idx]));
+			vcap_debugfs_show_raw_streams(vctrl, admin, out);
 			out->prf(out->dst, "\n");
 		}
 	}
