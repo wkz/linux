@@ -414,19 +414,25 @@ int vcap_addr_keysets(struct vcap_control *vctrl,
 		      int addr,
 		      struct vcap_keyset_list *kslist)
 {
+	u32 key = 0, mask = 0, sw_width_mask, rem_mask;
 	enum vcap_type vt = admin->vtype;
 	int keyset_sw_regs, idx;
-	u32 key = 0, mask = 0;
+	u16 vcap_sw_width;
 
 	/* Read the cache at the specified address */
-	keyset_sw_regs = DIV_ROUND_UP(vctrl->vcaps[vt].sw_width, 32);
+	vcap_sw_width = vctrl->vcaps[vt].sw_width;
+	keyset_sw_regs = DIV_ROUND_UP(vcap_sw_width, 32);
 	vctrl->ops->update(ndev, admin, VCAP_CMD_READ, VCAP_SEL_ALL, addr);
-	vctrl->ops->cache_read(ndev, admin, VCAP_SEL_ENTRY, 0,
-			       keyset_sw_regs);
+	vctrl->ops->cache_read(ndev, admin, VCAP_SEL_ENTRY, 0, keyset_sw_regs);
+	rem_mask = (1 << (vcap_sw_width % 32)) - 1;
 	/* Skip uninitialized key/mask entries */
 	for (idx = 0; idx < keyset_sw_regs; ++idx) {
-		key |= ~admin->cache.keystream[idx];
-		mask |= admin->cache.maskstream[idx];
+		/* Only the last subword is masked with rem_mask, ignoring spare
+		 * bits */
+		sw_width_mask = idx == keyset_sw_regs - 1 ? rem_mask :
+							    GENMASK(31, 0);
+		key |= ~admin->cache.keystream[idx] & sw_width_mask;
+		mask |= admin->cache.maskstream[idx] & sw_width_mask;
 	}
 	if (key == 0 && mask == 0)
 		return -EINVAL;
