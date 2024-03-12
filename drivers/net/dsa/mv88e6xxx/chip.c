@@ -87,7 +87,7 @@ int mv88e6xxx_write(struct mv88e6xxx_chip *chip, int addr, int reg, u16 val)
 int mv88e6xxx_wait_mask(struct mv88e6xxx_chip *chip, int addr, int reg,
 			u16 mask, u16 val)
 {
-	const unsigned long timeout = jiffies + msecs_to_jiffies(50);
+	const unsigned long timeout = jiffies + msecs_to_jiffies(1000);
 	u16 data;
 	int err;
 	int i;
