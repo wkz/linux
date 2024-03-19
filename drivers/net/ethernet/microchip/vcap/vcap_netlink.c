@@ -403,8 +403,9 @@ static int vcap_genl_add_rule_action_value_by_type(
 {
 	switch (ftype) {
 	case VCAP_FIELD_BIT:
-		return vcap_rule_add_action_bit(rule, action_id,
-						data->u1.value);
+		return vcap_rule_add_action_bit(
+			rule, action_id,
+			data->u1.value & 1 ? VCAP_BIT_1 : VCAP_BIT_0);
 	case VCAP_FIELD_U32:
 		return vcap_rule_add_action_u32(rule, action_id,
 						data->u32.value);
