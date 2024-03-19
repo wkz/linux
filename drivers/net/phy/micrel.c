@@ -130,10 +130,10 @@
  */
 #define LAN8814_1PPM_FORMAT			17179
 
-#define LAN8841_1PPM_FORMAT			34360
-
 #define PTP_RX_VERSION				0x0248
 #define PTP_TX_VERSION				0x0288
+#define PTP_MAX_VERSION(x)			(((x) & GENMASK(7, 0)) << 8)
+#define PTP_MIN_VERSION(x)			((x) & GENMASK(7, 0))
 
 #define PTP_RX_MOD				0x024F
 #define PTP_RX_MOD_BAD_UDPV4_CHKSUM_FORCE_FCS_DIS_ BIT(3)
@@ -4000,8 +4000,10 @@ static void lan8814_ptp_init(struct phy_device *phydev)
 	lanphy_write_page_reg(phydev, 5, PTP_RX_PARSE_IP_ADDR_EN, 0);
 
 	/* Disable checking for minorVersionPTP field */
-	lanphy_write_page_reg(phydev, 5, PTP_RX_VERSION, 0xff00);
-	lanphy_write_page_reg(phydev, 5, PTP_TX_VERSION, 0xff00);
+	lanphy_write_page_reg(phydev, 5, PTP_RX_VERSION,
+			      PTP_MAX_VERSION(0xff) | PTP_MIN_VERSION(0x0));
+	lanphy_write_page_reg(phydev, 5, PTP_TX_VERSION,
+			      PTP_MAX_VERSION(0xff) | PTP_MIN_VERSION(0x0));
 
 	skb_queue_head_init(&ptp_priv->tx_queue);
 	skb_queue_head_init(&ptp_priv->rx_queue);
@@ -4324,9 +4326,9 @@ static int lan8814_get_sqi_max(struct phy_device *phydev)
 #define LAN8841_PTP_RX_PARSE_L2_ADDR_EN		370
 #define LAN8841_PTP_RX_PARSE_IP_ADDR_EN		371
 #define LAN8841_PTP_RX_VERSION			374
-#define LAN8841_PTP_TX_VERSION			438
 #define LAN8841_PTP_TX_PARSE_L2_ADDR_EN		434
 #define LAN8841_PTP_TX_PARSE_IP_ADDR_EN		435
+#define LAN8841_PTP_TX_VERSION			438
 #define LAN8841_PTP_CMD_CTL			256
 #define LAN8841_PTP_CMD_CTL_PTP_ENABLE		BIT(2)
 #define LAN8841_PTP_CMD_CTL_PTP_DISABLE		BIT(1)
@@ -4641,12 +4643,8 @@ static int lan8841_ts_info(struct mii_timestamper *mii_ts,
 
 	info->phc_index = ptp_priv->ptp_clock ?
 				ptp_clock_index(ptp_priv->ptp_clock) : -1;
-	if (info->phc_index == -1) {
-		info->so_timestamping |= SOF_TIMESTAMPING_TX_SOFTWARE |
-					 SOF_TIMESTAMPING_RX_SOFTWARE |
-					 SOF_TIMESTAMPING_SOFTWARE;
+	if (info->phc_index == -1)
 		return 0;
-	}
 
 	info->so_timestamping = SOF_TIMESTAMPING_TX_HARDWARE |
 				SOF_TIMESTAMPING_RX_HARDWARE |
@@ -5860,6 +5858,7 @@ static struct phy_driver ksphy_driver[] = {
 	.flags		= PHY_POLL_CABLE_TEST,
 	.driver_data	= &ksz9131_type,
 	.probe		= kszphy_probe,
+	.soft_reset	= genphy_soft_reset,
 	.config_init	= ksz9131_config_init,
 	.config_intr	= kszphy_config_intr,
 	.config_aneg	= ksz9131_config_aneg,

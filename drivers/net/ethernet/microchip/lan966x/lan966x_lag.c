@@ -46,7 +46,7 @@ static void lan966x_lag_set_aggr_pgids(struct lan966x *lan966x)
 		if (!port || !port->bond || (visited & BIT(lag)))
 			continue;
 
-		bond = lan966x->ports[lag]->bond;
+		bond = port->bond;
 		bond_mask = lan966x_lag_get_mask(lan966x, bond);
 
 		for_each_set_bit(p, &bond_mask, lan966x->num_phys_ports) {
