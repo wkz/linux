@@ -262,7 +262,7 @@ static void lan966x_fdma_pci_tx_clear_buf(struct lan966x *lan966x, int weight)
 		dcb_buf->dev->stats.tx_bytes += dcb_buf->len;
 
 		dcb_buf->used = false;
-		if (!dcb_buf->ptp)
+		if (dcb_buf->use_skb && !dcb_buf->ptp)
 			napi_consume_skb(dcb_buf->data.skb, weight);
 		clear = true;
 	}
@@ -393,6 +393,61 @@ int lan966x_xdp_pci_setup(struct net_device *dev, struct netdev_bpf *xdp)
 	return 0;
 }
 
+static int lan966x_fdma_pci_xmit_xdpf(struct lan966x_port *port, void *ptr,
+				      u32 len)
+{
+	struct lan966x *lan966x = port->lan966x;
+	struct lan966x_tx_dcb_buf *next_dcb_buf;
+	struct lan966x_tx *tx = &lan966x->tx;
+	int next_to_use, ret = 0;
+	dma_addr_t dma_addr;
+	void *virt_addr;
+	__be32 *ifh;
+
+	spin_lock(&lan966x->tx_lock);
+
+	/* Get next index */
+	next_to_use = lan966x_fdma_get_next_dcb(tx);
+	if (next_to_use < 0) {
+		netif_stop_queue(port->dev);
+		ret = NETDEV_TX_BUSY;
+		goto out;
+	}
+
+	/* Get the next buffer */
+	next_dcb_buf = &tx->dcbs_buf[next_to_use];
+
+	ifh = ptr;
+	memset(ifh, 0, IFH_LEN_BYTES);
+	lan966x_ifh_set_bypass(ifh, 1);
+	lan966x_ifh_set_port(ifh, BIT_ULL(port->chip_port));
+
+	/* Get the virtual addr of the next DB and copy frame incl. IFH to it.*/
+	virt_addr = lan966x_fdma_pci_tx_db_virt_get(tx, next_to_use, 0);
+	memcpy(virt_addr, ptr, len);
+
+	/* Get the dma addr of the next DB and set the next db_ptr  */
+	dma_addr = lan966x_fdma_pci_tx_db_dma_get(tx, next_to_use, 0);
+	lan966x_fdma_pci_tx_setup_dcb(tx, next_to_use, len, dma_addr);
+
+	next_dcb_buf->len = len;
+
+	/* Fill up the buffer */
+	next_dcb_buf->use_skb = false;
+	next_dcb_buf->dma_addr = dma_addr;
+	next_dcb_buf->used = true;
+	next_dcb_buf->ptp = false;
+	next_dcb_buf->dev = port->dev;
+
+	/* Start the transmission */
+	lan966x_fdma_pci_tx_start(tx, next_to_use);
+
+out:
+	spin_unlock(&lan966x->tx_lock);
+
+	return ret;
+}
+
 int lan966x_xdp_pci_run(struct lan966x_port *port, void *data, u32 data_len)
 {
 	struct bpf_prog *xdp_prog = port->xdp_prog;
@@ -412,6 +467,9 @@ int lan966x_xdp_pci_run(struct lan966x_port *port, void *data, u32 data_len)
 	switch (act) {
 	case XDP_PASS:
 		return FDMA_PASS;
+	case XDP_TX:
+		return lan966x_fdma_pci_xmit_xdpf(port, data, data_len) ?
+		       FDMA_DROP : FDMA_TX;
 	default:
 		bpf_warn_invalid_xdp_action(port->dev, xdp_prog, act);
 		fallthrough;
@@ -460,6 +518,7 @@ static int lan966x_fdma_pci_xmit(struct sk_buff *skb, __be32 *ifh,
 
 	/* Fill up the buffer */
 	next_dcb_buf = &tx->dcbs_buf[next_to_use];
+	next_dcb_buf->use_skb = true;
 	next_dcb_buf->data.skb = skb;
 	next_dcb_buf->len = IFH_LEN_BYTES + skb->len + ETH_FCS_LEN;
 	next_dcb_buf->dma_addr = dma_addr;
@@ -500,6 +559,9 @@ static int lan966x_fdma_pci_napi_poll(struct napi_struct *napi, int weight)
 		case FDMA_ERROR:
 			lan966x_fdma_rx_advance_dcb(rx);
 			goto allocate_new;
+		case FDMA_TX:
+			lan966x_fdma_rx_advance_dcb(rx);
+			continue;
 		case FDMA_DROP:
 			lan966x_fdma_rx_advance_dcb(rx);
 			continue;
