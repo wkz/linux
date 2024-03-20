@@ -236,6 +236,7 @@ u64 lan966x_pci_atu_get_mapped_addr(struct lan966x_pci_atu_region *region,
 				    u64 addr);
 
 int lan966x_xdp_pci_setup(struct net_device *dev, struct netdev_bpf *xdp);
+int lan966x_xdp_pci_run(struct lan966x_port *port, void *data, u32 data_len);
 #endif
 
 struct lan966x_port;

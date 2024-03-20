@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
+#include <linux/bpf_trace.h>
+
 #include "lan966x_main.h"
 
 #define FDMA_PCI_DB_ALIGN 128
@@ -274,6 +276,7 @@ static void lan966x_fdma_pci_tx_clear_buf(struct lan966x *lan966x, int weight)
 static int lan966x_fdma_pci_rx_check_frame(struct lan966x_rx *rx, u64 *src_port)
 {
 	struct lan966x *lan966x = rx->lan966x;
+	struct lan966x_port *port;
 	struct lan966x_db *db;
 	void *virt_addr;
 
@@ -287,7 +290,13 @@ static int lan966x_fdma_pci_rx_check_frame(struct lan966x_rx *rx, u64 *src_port)
 	if (WARN_ON(*src_port >= lan966x->num_phys_ports))
 		return FDMA_ERROR;
 
-	return FDMA_PASS;
+	port = lan966x->ports[*src_port];
+	if (!lan966x_xdp_port_present(port))
+		return FDMA_PASS;
+
+	return lan966x_xdp_pci_run(port,
+				   virt_addr,
+				   FDMA_DCB_STATUS_BLOCKL(db->status));
 }
 
 static struct sk_buff *lan966x_fdma_pci_rx_get_frame(struct lan966x_rx *rx,
@@ -384,6 +393,36 @@ int lan966x_xdp_pci_setup(struct net_device *dev, struct netdev_bpf *xdp)
 	return 0;
 }
 
+int lan966x_xdp_pci_run(struct lan966x_port *port, void *data, u32 data_len)
+{
+	struct bpf_prog *xdp_prog = port->xdp_prog;
+	struct lan966x *lan966x = port->lan966x;
+	struct xdp_buff xdp;
+	u32 act;
+
+	xdp_init_buff(&xdp, lan966x->rx.max_mtu, &port->xdp_rxq);
+
+	xdp_prepare_buff(&xdp,
+			 data,
+			 IFH_LEN_BYTES + XDP_PACKET_HEADROOM,
+			 data_len - IFH_LEN_BYTES,
+			 false);
+
+	act = bpf_prog_run_xdp(xdp_prog, &xdp);
+	switch (act) {
+	case XDP_PASS:
+		return FDMA_PASS;
+	default:
+		bpf_warn_invalid_xdp_action(port->dev, xdp_prog, act);
+		fallthrough;
+	case XDP_ABORTED:
+		trace_xdp_exception(port->dev, xdp_prog, act);
+		fallthrough;
+	case XDP_DROP:
+		return FDMA_DROP;
+	}
+}
+
 static int lan966x_fdma_pci_xmit(struct sk_buff *skb, __be32 *ifh,
 				 struct net_device *dev)
 {
@@ -461,6 +500,9 @@ static int lan966x_fdma_pci_napi_poll(struct napi_struct *napi, int weight)
 		case FDMA_ERROR:
 			lan966x_fdma_rx_advance_dcb(rx);
 			goto allocate_new;
+		case FDMA_DROP:
+			lan966x_fdma_rx_advance_dcb(rx);
+			continue;
 		}
 		skb = lan966x_fdma_pci_rx_get_frame(rx, src_port);
 
