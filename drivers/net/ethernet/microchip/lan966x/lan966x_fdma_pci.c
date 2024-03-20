@@ -8,11 +8,13 @@
 
 #define FDMA_PCI_TX_DB_OFFSET(mtu, dcb, db) \
 	((sizeof(struct lan966x_tx_dcb) * FDMA_DCB_MAX) + \
-	((dcb) * FDMA_TX_DCB_MAX_DBS + (db)) * FDMA_PCI_DB_SIZE(mtu))
+	((dcb) * FDMA_TX_DCB_MAX_DBS + (db)) * FDMA_PCI_DB_SIZE(mtu) + \
+	XDP_PACKET_HEADROOM)
 
 #define FDMA_PCI_RX_DB_OFFSET(mtu, dcb, db) \
 	((sizeof(struct lan966x_rx_dcb) * FDMA_DCB_MAX) + \
-	((dcb) * FDMA_RX_DCB_MAX_DBS + (db)) * FDMA_PCI_DB_SIZE(mtu))
+	((dcb) * FDMA_RX_DCB_MAX_DBS + (db)) * FDMA_PCI_DB_SIZE(mtu) + \
+	XDP_PACKET_HEADROOM)
 
 #define FDMA_PCI_TX_DMA_SIZE(mtu) \
 	((sizeof(struct lan966x_tx_dcb) * FDMA_DCB_MAX) + \
@@ -303,9 +305,11 @@ static struct sk_buff *lan966x_fdma_pci_rx_get_frame(struct lan966x_rx *rx,
 				 rx->max_mtu,
 				 GFP_ATOMIC);
 
+	skb_reserve(skb, XDP_PACKET_HEADROOM);
+
 	memcpy(skb->data,
 	       lan966x_fdma_pci_rx_db_virt_get(rx, rx->dcb_index, rx->db_index),
-	       rx->max_mtu);
+	       rx->max_mtu - XDP_PACKET_HEADROOM);
 
 	if (unlikely(!skb))
 		goto out;
