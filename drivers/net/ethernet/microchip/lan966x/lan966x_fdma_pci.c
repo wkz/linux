@@ -367,6 +367,23 @@ static void lan966x_fdma_pci_tx_start(struct lan966x_tx *tx, int next_to_use)
 	tx->last_in_use = next_to_use;
 }
 
+int lan966x_xdp_pci_setup(struct net_device *dev, struct netdev_bpf *xdp)
+{
+	struct lan966x_port *port = netdev_priv(dev);
+	struct lan966x *lan966x = port->lan966x;
+	struct bpf_prog *old_prog;
+	bool old_xdp, new_xdp;
+
+	old_xdp = lan966x_xdp_present(lan966x);
+	old_prog = xchg(&port->xdp_prog, xdp->prog);
+	new_xdp = lan966x_xdp_present(lan966x);
+
+	if (old_xdp == new_xdp && old_prog)
+		bpf_prog_put(old_prog);
+
+	return 0;
+}
+
 static int lan966x_fdma_pci_xmit(struct sk_buff *skb, __be32 *ifh,
 				 struct net_device *dev)
 {
@@ -669,5 +686,6 @@ const struct lan966x_match_data lan966x_pci_desc = {
 		.fdma_xmit = &lan966x_fdma_pci_xmit,
 		.fdma_poll = &lan966x_fdma_pci_napi_poll,
 		.fdma_mtu = &lan966x_fdma_pci_change_mtu,
+		.xdp_setup = &lan966x_xdp_pci_setup,
 	},
 };

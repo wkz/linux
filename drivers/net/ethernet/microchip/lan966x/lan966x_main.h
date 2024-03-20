@@ -234,6 +234,8 @@ struct lan966x_pci_atu_region *
 lan966x_pci_atu_region_map(struct lan966x *lan966x, u64 target_addr, int size);
 u64 lan966x_pci_atu_get_mapped_addr(struct lan966x_pci_atu_region *region,
 				    u64 addr);
+
+int lan966x_xdp_pci_setup(struct net_device *dev, struct netdev_bpf *xdp);
 #endif
 
 struct lan966x_port;
@@ -467,6 +469,7 @@ struct lan966x_ops {
 			 struct net_device *dev);
 	int (*fdma_poll)(struct napi_struct *napi, int weight);
 	int (*fdma_mtu)(struct lan966x *lan966x);
+	int (*xdp_setup)(struct net_device *dev, struct netdev_bpf *xdp);
 };
 
 struct lan966x_match_data {
@@ -936,6 +939,7 @@ void lan966x_mirror_port_stats(struct lan966x_port *port,
 			       struct flow_stats *stats,
 			       bool ingress);
 
+int lan966x_xdp_setup(struct net_device *dev, struct netdev_bpf *xdp);
 int lan966x_xdp_port_init(struct lan966x_port *port);
 void lan966x_xdp_port_deinit(struct lan966x_port *port);
 int lan966x_xdp(struct net_device *dev, struct netdev_bpf *xdp);

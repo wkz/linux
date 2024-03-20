@@ -1406,6 +1406,7 @@ static const struct lan966x_match_data lan966x_desc = {
 		.fdma_xmit = &lan966x_fdma_xmit,
 		.fdma_poll = &lan966x_fdma_napi_poll,
 		.fdma_mtu = &lan966x_fdma_change_mtu,
+		.xdp_setup = &lan966x_xdp_setup,
 	},
 };
 
