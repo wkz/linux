@@ -1623,13 +1623,16 @@ static void sparx5_vcap_move(struct net_device *ndev, struct vcap_admin *admin,
 	u16 mv_num_pos;
 	u16 mv_size;
 
+	/* The move.offset is applied uniformly for insertion/deletion with
+	 * elem.addr += move.offset. Therefore, we move down for negative
+	 * offsets and up for positive offsets */
 	mv_size = count - 1;
 	if (offset > 0) {
 		mv_num_pos = offset - 1;
-		cmd = VCAP_CMD_MOVE_DOWN;
+		cmd = VCAP_CMD_MOVE_UP;
 	} else {
 		mv_num_pos = -offset - 1;
-		cmd = VCAP_CMD_MOVE_UP;
+		cmd = VCAP_CMD_MOVE_DOWN;
 	}
 
 	switch (admin->vtype) {
