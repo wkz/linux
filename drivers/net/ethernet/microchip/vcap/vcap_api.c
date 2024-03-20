@@ -326,6 +326,45 @@ static int vcap_find_keystream_typegroup_sw(struct vcap_control *vctrl,
 	return -EINVAL;
 }
 
+static u8 vcap_find_stream_type_id(struct vcap_control *vctrl,
+				   enum vcap_type vt, u32 *stream,
+				   const struct vcap_typegroup_hdr *tg_hdr)
+{
+	u8 type_id;
+
+	if (vctrl->vcaps[vt].sw_count <= 0)
+		return ~0;
+
+	if (tg_hdr && tg_hdr->type_width > 0) {
+		type_id = (stream[0] >> tg_hdr->tg_width) &
+			  GENMASK(tg_hdr->type_width - 1, 0);
+		return type_id;
+	}
+	return ~0;
+}
+
+static u8 vcap_find_keystream_type_id(struct vcap_control *vctrl,
+				      enum vcap_type vt, u32 *stream,
+				      enum vcap_keyfield_set keyset)
+{
+	const struct vcap_typegroup_hdr *tg_hdr;
+
+	tg_hdr = vcap_keyfield_typegroup_hdr(vctrl, vt, keyset);
+
+	return vcap_find_stream_type_id(vctrl, vt, stream, tg_hdr);
+}
+
+static u8 vcap_find_actionstream_type_id(struct vcap_control *vctrl,
+					 enum vcap_type vt, u32 *stream,
+					 enum vcap_actionfield_set actionset)
+{
+	const struct vcap_typegroup_hdr *tg_hdr;
+
+	tg_hdr = vcap_actionfield_typegroup_hdr(vctrl, vt, actionset);
+
+	return vcap_find_stream_type_id(vctrl, vt, stream, tg_hdr);
+}
+
 /* Verify that the typegroup information, subword count, keyset and type id
  * are in sync and correct, return the list of matchin keysets
  */
@@ -339,6 +378,7 @@ vcap_find_keystream_keysets(struct vcap_control *vctrl,
 {
 	const struct vcap_set *keyfield_set;
 	int sw_count, idx;
+	u8 type_id;
 
 	sw_count = vcap_find_keystream_typegroup_sw(vctrl, vt, keystream, mask,
 						    sw_max);
@@ -348,6 +388,11 @@ vcap_find_keystream_keysets(struct vcap_control *vctrl,
 	keyfield_set = vctrl->vcaps[vt].keyfield_set;
 	for (idx = 0; idx < vctrl->vcaps[vt].keyfield_set_size; ++idx) {
 		if (keyfield_set[idx].sw_per_item != sw_count)
+			continue;
+
+		type_id =
+			vcap_find_keystream_type_id(vctrl, vt, keystream, idx);
+		if (keyfield_set[idx].type_id != type_id)
 			continue;
 
 		if (vcap_verify_keystream_keyset(vctrl, vt, keystream,
@@ -419,6 +464,19 @@ const struct vcap_set *vcap_keyfieldset(struct vcap_control *vctrl,
 	return kset;
 }
 EXPORT_SYMBOL_GPL(vcap_keyfieldset);
+
+/* Return the typegroup header for the matching keyset (using subword size) */
+const struct vcap_typegroup_hdr *
+vcap_keyfield_typegroup_hdr(struct vcap_control *vctrl, enum vcap_type vt,
+			    enum vcap_keyfield_set keyset)
+{
+	const struct vcap_set *kset = vcap_keyfieldset(vctrl, vt, keyset);
+
+	/* Check that the keyset is valid */
+	if (!kset)
+		return NULL;
+	return &vctrl->vcaps[vt].keyfield_set_typegroup_hdrs[kset->sw_per_item];
+}
 
 /* Return the typegroup table for the matching keyset (using subword size) */
 const struct vcap_typegroup *
@@ -710,6 +768,21 @@ vcap_actionfieldset(struct vcap_control *vctrl,
 	if (aset->sw_per_item == 0 || aset->sw_per_item > vctrl->vcaps[vt].sw_count)
 		return NULL;
 	return aset;
+}
+
+/* Return the typegroup header for the matching actionset (using subword size)
+ */
+const struct vcap_typegroup_hdr *
+vcap_actionfield_typegroup_hdr(struct vcap_control *vctrl, enum vcap_type vt,
+			       enum vcap_actionfield_set actionset)
+{
+	const struct vcap_set *aset = vcap_actionfieldset(vctrl, vt, actionset);
+
+	/* Check that the actionset is valid */
+	if (!aset)
+		return NULL;
+	return &vctrl->vcaps[vt]
+		.actionfield_set_typegroup_hdrs[aset->sw_per_item];
 }
 
 /* Return the typegroup table for the matching actionset (using subword size) */
@@ -1429,6 +1502,7 @@ vcap_find_actionstream_actionset(struct vcap_control *vctrl,
 {
 	const struct vcap_set *actionfield_set;
 	int sw_count, idx;
+	u8 type_id;
 	bool res;
 
 	sw_count = vcap_find_actionstream_typegroup_sw(vctrl, vt, stream,
@@ -1441,6 +1515,9 @@ vcap_find_actionstream_actionset(struct vcap_control *vctrl,
 		if (actionfield_set[idx].sw_per_item != sw_count)
 			continue;
 
+		type_id = vcap_find_actionstream_type_id(vctrl, vt, stream, idx);
+		if (actionfield_set[idx].type_id != type_id)
+			continue;
 		res = vcap_verify_actionstream_actionset(vctrl, vt,
 							 stream, idx);
 		if (res)

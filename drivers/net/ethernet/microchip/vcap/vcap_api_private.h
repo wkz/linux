@@ -67,6 +67,10 @@ void vcap_iter_update(struct vcap_stream_iter *itr);
 /* Return the number of keyfields in the keyset */
 int vcap_keyfield_count(struct vcap_control *vctrl,
 			enum vcap_type vt, enum vcap_keyfield_set keyset);
+/* Return the typegroup header for the matching keyset (using subword size) */
+const struct vcap_typegroup_hdr *
+vcap_keyfield_typegroup_hdr(struct vcap_control *vctrl, enum vcap_type vt,
+			    enum vcap_keyfield_set keyset);
 /* Return the typegroup table for the matching keyset (using subword size) */
 const struct vcap_typegroup *
 vcap_keyfield_typegroup(struct vcap_control *vctrl,
@@ -86,6 +90,11 @@ vcap_actionfieldset(struct vcap_control *vctrl,
 int vcap_actionfield_count(struct vcap_control *vctrl,
 			   enum vcap_type vt,
 			   enum vcap_actionfield_set actionset);
+/* Return the typegroup header for the matching actionset (using subword size)
+ */
+const struct vcap_typegroup_hdr *
+vcap_actionfield_typegroup_hdr(struct vcap_control *vctrl, enum vcap_type vt,
+			       enum vcap_actionfield_set actionset);
 /* Return the typegroup table for the matching actionset (using subword size) */
 const struct vcap_typegroup *
 vcap_actionfield_typegroup(struct vcap_control *vctrl, enum vcap_type vt,
