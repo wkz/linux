@@ -2213,6 +2213,34 @@ dsa_slave_dcbnl_add_dscp_prio(struct net_device *dev, struct dcb_app *app)
 	return 0;
 }
 
+static int __maybe_unused
+dsa_slave_dcbnl_set_etype_prio(struct net_device *dev, struct dcb_app *app)
+{
+	struct dsa_port *dp = dsa_slave_to_port(dev);
+	struct dsa_switch *ds = dp->ds;
+	unsigned long mask, new_prio;
+	int err;
+
+	if (!ds->ops->port_add_etype_prio)
+		return -EOPNOTSUPP;
+
+	err = dcb_ieee_setapp(dev, app);
+	if (err)
+		return err;
+
+	mask = dcb_ieee_getapp_mask(dev, app);
+	new_prio = __fls(mask);
+
+	err = ds->ops->port_add_etype_prio(ds, dp->index,
+					   app->protocol, new_prio);
+	if (err) {
+		dcb_ieee_delapp(dev, app);
+		return err;
+	}
+
+	return 0;
+}
+
 static int __maybe_unused dsa_slave_dcbnl_ieee_setapp(struct net_device *dev,
 						      struct dcb_app *app)
 {
@@ -2222,7 +2250,7 @@ static int __maybe_unused dsa_slave_dcbnl_ieee_setapp(struct net_device *dev,
 		case 0:
 			return dsa_slave_dcbnl_set_default_prio(dev, app);
 		default:
-			return -EOPNOTSUPP;
+			return dsa_slave_dcbnl_set_etype_prio(dev, app);
 		}
 		break;
 	case IEEE_8021QAZ_APP_SEL_DSCP:
@@ -2283,6 +2311,30 @@ dsa_slave_dcbnl_del_dscp_prio(struct net_device *dev, struct dcb_app *app)
 	return 0;
 }
 
+static int __maybe_unused
+dsa_slave_dcbnl_del_etype_prio(struct net_device *dev, struct dcb_app *app)
+{
+	struct dsa_port *dp = dsa_slave_to_port(dev);
+	struct dsa_switch *ds = dp->ds;
+	int err;
+
+	if (!ds->ops->port_del_etype_prio)
+		return -EOPNOTSUPP;
+
+	err = dcb_ieee_delapp(dev, app);
+	if (err)
+		return err;
+
+	err = ds->ops->port_del_etype_prio(ds, dp->index,
+					   app->protocol, app->priority);
+	if (err) {
+		dcb_ieee_setapp(dev, app);
+		return err;
+	}
+
+	return 0;
+}
+
 static int __maybe_unused dsa_slave_dcbnl_ieee_delapp(struct net_device *dev,
 						      struct dcb_app *app)
 {
@@ -2292,7 +2344,7 @@ static int __maybe_unused dsa_slave_dcbnl_ieee_delapp(struct net_device *dev,
 		case 0:
 			return dsa_slave_dcbnl_del_default_prio(dev, app);
 		default:
-			return -EOPNOTSUPP;
+			return dsa_slave_dcbnl_del_etype_prio(dev, app);
 		}
 		break;
 	case IEEE_8021QAZ_APP_SEL_DSCP:

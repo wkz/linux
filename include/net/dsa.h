@@ -955,6 +955,10 @@ struct dsa_switch_ops {
 				      u8 prio);
 	int	(*port_del_dscp_prio)(struct dsa_switch *ds, int port, u8 dscp,
 				      u8 prio);
+	int	(*port_add_etype_prio)(struct dsa_switch *ds, int port, u16 etype,
+				       u8 prio);
+	int	(*port_del_etype_prio)(struct dsa_switch *ds, int port, u16 etype,
+				       u8 prio);
 
 	/*
 	 * Suspend and resume
