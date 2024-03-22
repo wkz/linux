@@ -110,6 +110,15 @@ const char *vcap_actionset_name(struct vcap_control *vctrl,
 const char *vcap_actionfield_name(struct vcap_control *vctrl,
 				  enum vcap_action_field action);
 
+/* Detect if first keyset address in streams is uninitialized */
+bool vcap_detect_uninit_keyset_addr(struct vcap_control *vctrl,
+				    struct vcap_admin *admin, u32 *keystream,
+				    u32 *maskstream);
+
+/* Read a single address into key, mask and actionstreams. */
+void vcap_read_addr(struct vcap_control *vctrl, struct net_device *ndev,
+		    struct vcap_admin *admin, int addr);
+
 /* Read key data from a VCAP address and discover if there are any rule keysets
  * here
  */
@@ -123,6 +132,13 @@ int vcap_addr_keysets(struct vcap_control *vctrl, struct net_device *ndev,
 int vcap_find_keystream_keysets(struct vcap_control *vctrl, enum vcap_type vt,
 				u32 *keystream, u32 *mskstream, bool mask,
 				int sw_max, struct vcap_keyset_list *kslist);
+
+/* Verify that the typegroup information, subword count, actionset and type id
+ * are in sync and correct, return the actionset
+ */
+enum vcap_actionfield_set
+vcap_find_actionstream_actionset(struct vcap_control *vctrl, enum vcap_type vt,
+				 u32 *stream, int sw_max);
 
 /* Get the keysets that matches the rule key type/mask */
 int vcap_rule_get_keysets(struct vcap_rule_internal *ri,

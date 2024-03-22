@@ -405,6 +405,48 @@ vcap_find_keystream_keysets(struct vcap_control *vctrl,
 }
 EXPORT_SYMBOL_GPL(vcap_find_keystream_keysets);
 
+
+/* Detect if first keyset address in streams is uninitialized */
+bool vcap_detect_uninit_keyset_addr(struct vcap_control *vctrl,
+					   struct vcap_admin *admin,
+					   u32 *keystream, u32 *maskstream)
+{
+	u32 key = 0, mask = 0, sw_width_mask, rem_mask;
+	enum vcap_type vt = admin->vtype;
+	int keyset_sw_regs, idx;
+	u16 vcap_sw_width;
+
+	vcap_sw_width = vctrl->vcaps[vt].sw_width;
+	keyset_sw_regs = DIV_ROUND_UP(vcap_sw_width, 32);
+	rem_mask = (1 << (vcap_sw_width % 32)) - 1;
+	for (idx = 0; idx < keyset_sw_regs; ++idx) {
+		/* Only the last subword is masked with rem_mask, ignoring spare
+		 * bits */
+		sw_width_mask = idx == keyset_sw_regs - 1 ? rem_mask :
+							    GENMASK(31, 0);
+		key |= ~keystream[idx] & sw_width_mask;
+		mask |= maskstream[idx] & sw_width_mask;
+	}
+	return key == 0 && mask == 0;
+}
+
+/* Read a single address into key, mask and actionstreams. */
+void vcap_read_addr(struct vcap_control *vctrl, struct net_device *ndev,
+			   struct vcap_admin *admin, int addr)
+{
+	int keyset_sw_regs, actionset_sw_regs;
+	enum vcap_type vt = admin->vtype;
+
+	/* Read the cache at the specified address */
+	keyset_sw_regs = DIV_ROUND_UP(vctrl->vcaps[vt].sw_width, 32);
+	actionset_sw_regs = DIV_ROUND_UP(vctrl->vcaps[vt].act_width, 32);
+	vctrl->ops->update(ndev, admin, VCAP_CMD_READ, VCAP_SEL_ALL, addr);
+	vctrl->ops->cache_read(ndev, admin, VCAP_SEL_ENTRY, 0, keyset_sw_regs);
+	vctrl->ops->cache_read(ndev, admin, VCAP_SEL_ACTION, 0,
+			       actionset_sw_regs);
+	return;
+}
+
 /* Read key data from a VCAP address and discover if there are any rule keysets
  * here
  */
@@ -414,27 +456,13 @@ int vcap_addr_keysets(struct vcap_control *vctrl,
 		      int addr,
 		      struct vcap_keyset_list *kslist)
 {
-	u32 key = 0, mask = 0, sw_width_mask, rem_mask;
 	enum vcap_type vt = admin->vtype;
-	int keyset_sw_regs, idx;
-	u16 vcap_sw_width;
 
 	/* Read the cache at the specified address */
-	vcap_sw_width = vctrl->vcaps[vt].sw_width;
-	keyset_sw_regs = DIV_ROUND_UP(vcap_sw_width, 32);
-	vctrl->ops->update(ndev, admin, VCAP_CMD_READ, VCAP_SEL_ALL, addr);
-	vctrl->ops->cache_read(ndev, admin, VCAP_SEL_ENTRY, 0, keyset_sw_regs);
-	rem_mask = (1 << (vcap_sw_width % 32)) - 1;
+	vcap_read_addr(vctrl, ndev, admin, addr);
 	/* Skip uninitialized key/mask entries */
-	for (idx = 0; idx < keyset_sw_regs; ++idx) {
-		/* Only the last subword is masked with rem_mask, ignoring spare
-		 * bits */
-		sw_width_mask = idx == keyset_sw_regs - 1 ? rem_mask :
-							    GENMASK(31, 0);
-		key |= ~admin->cache.keystream[idx] & sw_width_mask;
-		mask |= admin->cache.maskstream[idx] & sw_width_mask;
-	}
-	if (key == 0 && mask == 0)
+	if (vcap_detect_uninit_keyset_addr(vctrl, admin, admin->cache.keystream,
+					   admin->cache.keystream))
 		return -EINVAL;
 	/* Decode and locate the keysets */
 	return vcap_find_keystream_keysets(vctrl, vt, admin->cache.keystream,
@@ -1500,7 +1528,7 @@ static int vcap_find_actionstream_typegroup_sw(struct vcap_control *vctrl,
 /* Verify that the typegroup information, subword count, actionset and type id
  * are in sync and correct, return the actionset
  */
-static enum vcap_actionfield_set
+enum vcap_actionfield_set
 vcap_find_actionstream_actionset(struct vcap_control *vctrl,
 				 enum vcap_type vt,
 				 u32 *stream,
