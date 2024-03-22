@@ -1626,6 +1626,11 @@ static int mv88e6xxx_rmu_setup(struct mv88e6xxx_chip *chip)
 
 static int mv88e6xxx_pot_setup(struct mv88e6xxx_chip *chip)
 {
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(chip->qpri_po); i++)
+		refcount_set(&chip->qpri_po[i].refcnt, 0);
+
 	if (chip->info->ops->pot_clear)
 		return chip->info->ops->pot_clear(chip);
 
@@ -3287,6 +3292,7 @@ static int mv88e6xxx_setup_port(struct mv88e6xxx_chip *chip, int port)
 
 	chip->ports[port].chip = chip;
 	chip->ports[port].port = port;
+	refcount_set(&chip->ports[port].etype.refcnt, 0);
 
 	err = mv88e6xxx_port_setup_mac(chip, port, LINK_UNFORCED,
 				       SPEED_UNFORCED, DUPLEX_UNFORCED,
@@ -6386,6 +6392,7 @@ static struct mv88e6xxx_chip *mv88e6xxx_alloc_chip(struct device *dev)
 	chip->dev = dev;
 
 	mutex_init(&chip->reg_lock);
+	mutex_init(&chip->arb_lock);
 	INIT_LIST_HEAD(&chip->mdios);
 	idr_init(&chip->policies);
 	INIT_LIST_HEAD(&chip->msts);
@@ -6918,6 +6925,61 @@ static int mv88e6xxx_crosschip_lag_leave(struct dsa_switch *ds, int sw_index,
 	return err_sync ? : err_pvt;
 }
 
+int mv88e6xxx_port_add_etype_prio(struct dsa_switch *ds, int port, u16 etype,
+				  u8 prio)
+{
+	struct mv88e6xxx_chip *chip = ds->priv;
+	int err;
+
+	mv88e6xxx_reg_lock(chip);
+	err = mv88e6xxx_port_claim_ether_type(chip, port, etype);
+	if (err)
+		goto err;
+
+	err = mv88e6xxx_g2_claim_qpri_po(chip,
+					 MV88E6XXX_G2_PRIO_OVERRIDE_PTR_ETYPE,
+					 prio);
+	if (err)
+		goto err_relinquish_etype;
+
+	mv88e6xxx_reg_unlock(chip);
+	return 0;
+
+err_relinquish_etype:
+	mv88e6xxx_port_relinquish_ether_type(chip, port);
+err:
+	mv88e6xxx_reg_unlock(chip);
+	return err;
+}
+
+int mv88e6xxx_port_del_etype_prio(struct dsa_switch *ds, int port, u16 etype,
+				  u8 prio)
+{
+	struct mv88e6xxx_chip *chip = ds->priv;
+	int err;
+
+	mv88e6xxx_reg_lock(chip);
+	err = mv88e6xxx_g2_relinquish_qpri_po(chip,
+					      MV88E6XXX_G2_PRIO_OVERRIDE_PTR_ETYPE);
+	if (err)
+		goto err;
+
+	err = mv88e6xxx_port_relinquish_ether_type(chip, port);
+	if (err)
+		goto err_claim_po;
+
+	mv88e6xxx_reg_unlock(chip);
+	return 0;
+
+err_claim_po:
+	mv88e6xxx_g2_claim_qpri_po(chip,
+				   MV88E6XXX_G2_PRIO_OVERRIDE_PTR_ETYPE,
+				   prio);
+err:
+	mv88e6xxx_reg_unlock(chip);
+	return err;
+}
+
 static const struct dsa_switch_ops mv88e6xxx_switch_ops = {
 	.get_tag_protocol	= mv88e6xxx_get_tag_protocol,
 	.change_tag_protocol	= mv88e6xxx_change_tag_protocol,
@@ -6984,6 +7046,8 @@ static const struct dsa_switch_ops mv88e6xxx_switch_ops = {
 	.crosschip_lag_change	= mv88e6xxx_crosschip_lag_change,
 	.crosschip_lag_join	= mv88e6xxx_crosschip_lag_join,
 	.crosschip_lag_leave	= mv88e6xxx_crosschip_lag_leave,
+	.port_add_etype_prio	= mv88e6xxx_port_add_etype_prio,
+	.port_del_etype_prio	= mv88e6xxx_port_del_etype_prio,
 };
 
 static int mv88e6xxx_register_switch(struct mv88e6xxx_chip *chip)

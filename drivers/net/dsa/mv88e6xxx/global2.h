@@ -138,6 +138,7 @@
 #define MV88E6XXX_G2_PRIO_OVERRIDE_UPDATE	0x8000
 #define MV88E6XXX_G2_PRIO_OVERRIDE_FPRISET	0x1000
 #define MV88E6XXX_G2_PRIO_OVERRIDE_PTR_MASK	0x0f00
+#define MV88E6XXX_G2_PRIO_OVERRIDE_PTR_ETYPE	0xc
 #define MV88E6352_G2_PRIO_OVERRIDE_QPRIAVBEN	0x0080
 #define MV88E6352_G2_PRIO_OVERRIDE_DATAAVB_MASK	0x0030
 #define MV88E6XXX_G2_PRIO_OVERRIDE_QFPRIEN	0x0008
@@ -356,6 +357,9 @@ int mv88e6185_g2_mgmt_rsvd2cpu(struct mv88e6xxx_chip *chip);
 int mv88e6352_g2_mgmt_rsvd2cpu(struct mv88e6xxx_chip *chip);
 
 int mv88e6xxx_g2_pot_clear(struct mv88e6xxx_chip *chip);
+int mv88e6xxx_g2_claim_qpri_po(struct mv88e6xxx_chip *chip, u8 pointer,
+			       u8 qpri);
+int mv88e6xxx_g2_relinquish_qpri_po(struct mv88e6xxx_chip *chip, u8 pointer);
 
 int mv88e6xxx_g2_trunk_mask_write(struct mv88e6xxx_chip *chip, int num,
 				  bool hash, u16 mask);

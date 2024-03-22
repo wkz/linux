@@ -1539,6 +1539,52 @@ int mv88e6351_port_set_ether_type(struct mv88e6xxx_chip *chip, int port,
 	return mv88e6xxx_port_write(chip, port, MV88E6XXX_PORT_ETH_TYPE, etype);
 }
 
+int mv88e6xxx_port_claim_ether_type(struct mv88e6xxx_chip *chip, int port,
+				    u16 etype)
+{
+	struct mv88e6xxx_port *p = &chip->ports[port];
+	int err = 0;
+
+	if (!chip->info->ops->port_set_ether_type)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&chip->arb_lock);
+	if (refcount_read(&p->etype.refcnt)) {
+		if (etype == p->etype.proto)
+			refcount_inc(&p->etype.refcnt);
+		else
+			err = -EBUSY;
+	} else {
+		err = chip->info->ops->port_set_ether_type(chip, port, etype);
+		if (!err) {
+			refcount_set(&p->etype.refcnt, 1);
+			p->etype.proto = etype;
+		}
+	}
+	mutex_unlock(&chip->arb_lock);
+
+	return err;
+}
+
+int mv88e6xxx_port_relinquish_ether_type(struct mv88e6xxx_chip *chip, int port)
+{
+	struct mv88e6xxx_port *p = &chip->ports[port];
+	int err = 0;
+
+	if (!chip->info->ops->port_set_ether_type)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&chip->arb_lock);
+	if (refcount_dec_and_test(&p->etype.refcnt)) {
+		err = chip->info->ops->port_set_ether_type(chip, port,
+							   MV88E6XXX_PORT_ETH_TYPE_DEFAULT);
+		if (err)
+			refcount_set(&p->etype.refcnt, 1);
+	}
+	mutex_unlock(&chip->arb_lock);
+	return err;
+}
+
 /* Offset 0x16: LED Control Register */
 
 int mv88e6393x_port_led_write(struct mv88e6xxx_chip *chip, int port,

@@ -315,7 +315,7 @@ int mv88e6xxx_g2_atu_stats_get(struct mv88e6xxx_chip *chip, u16 *stats)
 static int mv88e6xxx_g2_pot_write(struct mv88e6xxx_chip *chip, int pointer,
 				  u8 data)
 {
-	u16 val = (pointer << 8) | (data & 0x7);
+	u16 val = (pointer << 8) | (data & 0xf);
 
 	return mv88e6xxx_g2_write(chip, MV88E6XXX_G2_PRIO_OVERRIDE,
 				  MV88E6XXX_G2_PRIO_OVERRIDE_UPDATE | val);
@@ -331,6 +331,60 @@ int mv88e6xxx_g2_pot_clear(struct mv88e6xxx_chip *chip)
 		if (err)
 			break;
 	}
+
+	return err;
+}
+
+int mv88e6xxx_g2_claim_qpri_po(struct mv88e6xxx_chip *chip, u8 pointer,
+			       u8 qpri)
+{
+	struct mv88e6xxx_po *po;
+	int err = 0;
+
+	if (pointer > ARRAY_SIZE(chip->qpri_po))
+		return -EINVAL;
+
+	if (qpri > 7)
+		return -ERANGE;
+
+	po = &chip->qpri_po[pointer];
+
+	mutex_lock(&chip->arb_lock);
+	if (refcount_read(&po->refcnt)) {
+		if (qpri == po->pri)
+			refcount_inc(&po->refcnt);
+		else
+			err = -EBUSY;
+	} else {
+		err = mv88e6xxx_g2_pot_write(chip, pointer,
+					     MV88E6XXX_G2_PRIO_OVERRIDE_QFPRIEN | qpri);
+		if (!err) {
+			refcount_set(&po->refcnt, 1);
+			po->pri = qpri;
+		}
+	}
+	mutex_unlock(&chip->arb_lock);
+
+	return err;
+}
+
+int mv88e6xxx_g2_relinquish_qpri_po(struct mv88e6xxx_chip *chip, u8 pointer)
+{
+	struct mv88e6xxx_po *po;
+	int err = 0;
+
+	if (pointer > ARRAY_SIZE(chip->qpri_po))
+		return -EINVAL;
+
+	po = &chip->qpri_po[pointer];
+
+	mutex_lock(&chip->arb_lock);
+	if (refcount_dec_and_test(&po->refcnt)) {
+		err = mv88e6xxx_g2_pot_write(chip, pointer, 0);
+		if (err)
+			refcount_set(&po->refcnt, 1);
+	}
+	mutex_unlock(&chip->arb_lock);
 
 	return err;
 }

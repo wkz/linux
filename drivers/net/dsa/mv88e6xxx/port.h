@@ -271,7 +271,18 @@
 
 /* Offset 0x0F: Port Special Ether Type */
 #define MV88E6XXX_PORT_ETH_TYPE		0x0f
-#define MV88E6XXX_PORT_ETH_TYPE_DEFAULT	0x9100
+
+/* When MV88E6XXX_PORT_ETH_TYPE is used to override the queue priority
+ * of matching packets, the override applies to all the chip's
+ * ports. However, if the packet also matches a traffic class that the
+ * hardware classifies as being of higher priority, then that class's
+ * override configuration is used instead, even if that override is
+ * disabled. The class which is one level higher than EType is PPPoE,
+ * so by using that as the default value when no other value has been
+ * requested, we effectively disable the EType class for that port.
+ */
+#define MV88E6XXX_PORT_ETH_TYPE_DEFAULT	ETH_P_PPP_DISC
+
 
 /* Offset 0x10: InDiscards Low Counter */
 #define MV88E6XXX_PORT_IN_DISCARD_LO	0x10
@@ -411,8 +422,13 @@ int mv88e6352_port_set_policy(struct mv88e6xxx_chip *chip, int port,
 int mv88e6393x_port_set_policy(struct mv88e6xxx_chip *chip, int port,
 			       enum mv88e6xxx_policy_mapping mapping,
 			       enum mv88e6xxx_policy_action action);
+int mv88e6393x_port_set_ether_type(struct mv88e6xxx_chip *chip, int port,
+				   u16 etype);
 int mv88e6351_port_set_ether_type(struct mv88e6xxx_chip *chip, int port,
 				  u16 etype);
+int mv88e6xxx_port_claim_ether_type(struct mv88e6xxx_chip *chip, int port,
+				    u16 etype);
+int mv88e6xxx_port_relinquish_ether_type(struct mv88e6xxx_chip *chip, int port);
 int mv88e6393x_port_led_write(struct mv88e6xxx_chip *chip, int port,
 			      unsigned int pointer, u16 data);
 int mv88e6393x_port_led_read(struct mv88e6xxx_chip *chip, int port,
@@ -423,8 +439,6 @@ int mv88e6393x_set_egress_port(struct mv88e6xxx_chip *chip,
 int mv88e6393x_port_set_upstream_port(struct mv88e6xxx_chip *chip, int port,
 				      int upstream_port);
 int mv88e6393x_port_mgmt_rsvd2cpu(struct mv88e6xxx_chip *chip);
-int mv88e6393x_port_set_ether_type(struct mv88e6xxx_chip *chip, int port,
-				   u16 etype);
 int mv88e6xxx_port_set_message_port(struct mv88e6xxx_chip *chip, int port,
 				    bool message_port);
 int mv88e6xxx_port_set_trunk(struct mv88e6xxx_chip *chip, int port,
