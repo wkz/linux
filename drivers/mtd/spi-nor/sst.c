@@ -109,8 +109,10 @@ static const struct flash_info sst_nor_parts[] = {
 		NO_SFDP_FLAGS(SECT_4K)
 		MFR_FLAGS(SST_WRITE) },
 	{ "sst26wf016b", INFO(0xbf2651, 0, 64 * 1024, 32)
+		FLAGS(SPI_NOR_HAS_LOCK | SPI_NOR_SWP_IS_VOLATILE)
 		NO_SFDP_FLAGS(SECT_4K | SPI_NOR_DUAL_READ |
-			      SPI_NOR_QUAD_READ) },
+			      SPI_NOR_QUAD_READ)
+		.fixups = &sst26vf_nor_fixups },
 	{ "sst26vf016b", INFO(0xbf2641, 0, 64 * 1024, 32)
 		NO_SFDP_FLAGS(SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_HAS_LOCK |
 			      SPI_NOR_SWP_IS_VOLATILE)
