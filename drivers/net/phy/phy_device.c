@@ -1547,7 +1547,6 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 	if (err)
 		goto error;
 
-	phy_resume(phydev);
 	if (!phydev->is_on_sfp_module)
 		phy_led_triggers_register(phydev);
 
