@@ -8,6 +8,8 @@
  */
 
 #include "chip.h"
+#include "global1.h"
+#include "global2.h"
 #include "smi.h"
 
 /* The switch ADDR[4:1] configuration pins define the chip SMI device address
@@ -168,6 +170,78 @@ static const struct mv88e6xxx_bus_ops mv88e6xxx_smi_indirect_ops = {
 	.init = mv88e6xxx_smi_indirect_init,
 };
 
+static u8 mv88e6393_smi_indirect_remap(int dev, int reg)
+{
+	static const u8 g1_remap[32] = {
+		[MV88E6352_G1_VTU_FID] = MV88E6393_SMI_G1_VTU_FID,
+		[MV88E6352_G1_VTU_SID] = MV88E6393_SMI_G1_VTU_SID,
+		[MV88E6XXX_G1_STS] = MV88E6393_SMI_G1_STS,
+		[MV88E6XXX_G1_VTU_OP] = MV88E6393_SMI_G1_VTU_OP,
+		[MV88E6XXX_G1_VTU_VID] = MV88E6393_SMI_G1_VTU_VID,
+		[MV88E6XXX_G1_VTU_DATA1] = MV88E6393_SMI_G1_VTU_DATA1,
+		[MV88E6XXX_G1_VTU_DATA2] = MV88E6393_SMI_G1_VTU_DATA2,
+		[MV88E6352_G1_ATU_FID] = MV88E6393_SMI_G1_ATU_FID,
+		[MV88E6XXX_G1_ATU_CTL] = MV88E6393_SMI_G1_ATU_CTL,
+		[MV88E6XXX_G1_ATU_OP] = MV88E6393_SMI_G1_ATU_OP,
+		[MV88E6XXX_G1_ATU_DATA] = MV88E6393_SMI_G1_ATU_DATA,
+		[MV88E6XXX_G1_ATU_MAC01] = MV88E6393_SMI_G1_ATU_MAC01,
+		[MV88E6XXX_G1_ATU_MAC23] = MV88E6393_SMI_G1_ATU_MAC23,
+		[MV88E6XXX_G1_ATU_MAC45] = MV88E6393_SMI_G1_ATU_MAC45,
+		[MV88E6XXX_G1_FREE_Q_SIZE] = MV88E6393_SMI_G1_FREE_Q_SIZE,
+		[MV88E6XXX_G1_STATS_OP] = MV88E6393_SMI_G1_STATS_OP,
+		[MV88E6XXX_G1_STATS_COUNTER_32] = MV88E6393_SMI_G1_STATS_COUNTER_32,
+		[MV88E6XXX_G1_STATS_COUNTER_01] = MV88E6393_SMI_G1_STATS_COUNTER_01,
+	};
+
+	static const u8 g2_remap[32] = {
+		[MV88E6390_G2_IMP_COMM] = MV88E6393_SMI_G2_IMP_COMM,
+		[MV88E6352_G2_AVB_CMD] = MV88E6393_SMI_G2_AVB_CMD,
+		[MV88E6352_G2_AVB_DATA] = MV88E6393_SMI_G2_AVB_DATA,
+		[MV88E6XXX_G2_SMI_PHY_CMD] = MV88E6393_SMI_G2_SMI_PHY_CMD,
+		[MV88E6XXX_G2_SMI_PHY_DATA] = MV88E6393_SMI_G2_SMI_PHY_DATA,
+		[MV88E6393X_G2_MACLINK_INT_SRC] = MV88E6393_SMI_G2_MACLINK_INT_SRC,
+	};
+
+	switch (dev) {
+	case 0x1b:
+		return g1_remap[reg];
+	case 0x1c:
+		return g2_remap[reg];
+	}
+
+	return 0;
+}
+
+static int mv88e6393_smi_indirect_read(struct mv88e6xxx_chip *chip,
+				       int dev, int reg, u16 *data)
+{
+	u8 remap = mv88e6393_smi_indirect_remap(dev, reg);
+
+	if (remap)
+		return mv88e6xxx_smi_direct_read(chip, chip->sw_addr,
+						 remap, data);
+
+	return mv88e6xxx_smi_indirect_read(chip, dev, reg, data);
+}
+
+static int mv88e6393_smi_indirect_write(struct mv88e6xxx_chip *chip,
+					int dev, int reg, u16 data)
+{
+	u8 remap = mv88e6393_smi_indirect_remap(dev, reg);
+
+	if (remap)
+		return mv88e6xxx_smi_direct_write(chip, chip->sw_addr,
+						  remap, data);
+
+	return mv88e6xxx_smi_indirect_write(chip, dev, reg, data);
+}
+
+static const struct mv88e6xxx_bus_ops mv88e6393_smi_indirect_ops = {
+	.read = mv88e6393_smi_indirect_read,
+	.write = mv88e6393_smi_indirect_write,
+	.init = mv88e6xxx_smi_indirect_init,
+};
+
 int mv88e6xxx_smi_init(struct mv88e6xxx_chip *chip,
 		       struct mii_bus *bus, int sw_addr)
 {
@@ -175,6 +249,8 @@ int mv88e6xxx_smi_init(struct mv88e6xxx_chip *chip,
 		chip->smi_ops = &mv88e6xxx_smi_dual_direct_ops;
 	else if (sw_addr == 0)
 		chip->smi_ops = &mv88e6xxx_smi_direct_ops;
+	else if (chip->info->family == MV88E6XXX_FAMILY_6393)
+		chip->smi_ops = &mv88e6393_smi_indirect_ops;
 	else if (chip->info->multi_chip)
 		chip->smi_ops = &mv88e6xxx_smi_indirect_ops;
 	else

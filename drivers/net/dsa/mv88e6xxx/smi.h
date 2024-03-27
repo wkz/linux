@@ -31,6 +31,36 @@
 /* Offset 0x01: SMI Data Register */
 #define MV88E6XXX_SMI_DATA			0x01
 
+/* When using the 6393 in indirect addressing mode, a subset of the
+ * most commonly used registers are directly mapped out to the chip's
+ * top address space, allowing them to be directly accessed.
+ */
+#define MV88E6393_SMI_G1_VTU_FID		0x02
+#define MV88E6393_SMI_G1_VTU_SID		0x03
+#define MV88E6393_SMI_G1_STS			0x04
+#define MV88E6393_SMI_G1_VTU_OP			0x05
+#define MV88E6393_SMI_G1_VTU_VID		0x06
+#define MV88E6393_SMI_G1_VTU_DATA1		0x07
+#define MV88E6393_SMI_G1_VTU_DATA2		0x08
+#define MV88E6393_SMI_G1_ATU_FID		0x09
+#define MV88E6393_SMI_G1_ATU_CTL		0x0a
+#define MV88E6393_SMI_G1_ATU_OP			0x0b
+#define MV88E6393_SMI_G1_ATU_DATA		0x0c
+#define MV88E6393_SMI_G1_ATU_MAC01		0x0d
+#define MV88E6393_SMI_G1_ATU_MAC23		0x0e
+#define MV88E6393_SMI_G1_ATU_MAC45		0x0f
+#define MV88E6393_SMI_G2_IMP_COMM		0x13
+#define MV88E6393_SMI_G2_AVB_CMD		0x16
+#define MV88E6393_SMI_G2_AVB_DATA		0x17
+#define MV88E6393_SMI_G2_SMI_PHY_CMD		0x18
+#define MV88E6393_SMI_G2_SMI_PHY_DATA		0x19
+#define MV88E6393_SMI_G2_MACLINK_INT_SRC	0x1a
+#define MV88E6393_SMI_G1_FREE_Q_SIZE		0x1b
+#define MV88E6393_SMI_G1_STATS_OP		0x1d
+#define MV88E6393_SMI_G1_STATS_COUNTER_32	0x1e
+#define MV88E6393_SMI_G1_STATS_COUNTER_01	0x1f
+
+
 int mv88e6xxx_smi_init(struct mv88e6xxx_chip *chip,
 		       struct mii_bus *bus, int sw_addr);
 

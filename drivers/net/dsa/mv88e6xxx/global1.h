@@ -218,6 +218,9 @@
 #define MV88E6390_G1_MONITOR_MGMT_CTL_PTR_CPU_DEST_MGMTPRI	0x00e0
 #define MV88E6390_G1_MONITOR_MGMT_CTL_DATA_MASK			0x00ff
 
+/* Offset 0x1B: Free Queue Size Register */
+#define MV88E6XXX_G1_FREE_Q_SIZE		0x1b
+
 /* Offset 0x1C: Global Control 2 */
 #define MV88E6XXX_G1_CTL2			0x1c
 #define MV88E6185_G1_CTL2_CASCADE_PORT_MASK	0xf000

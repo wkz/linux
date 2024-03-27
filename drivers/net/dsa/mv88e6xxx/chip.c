@@ -6349,6 +6349,13 @@ static int mv88e6xxx_detect(struct mv88e6xxx_chip *chip)
 	/* Update the compatible info with the probed one */
 	chip->info = info;
 
+	/* Now that we know the exact chip in use, we might be able to
+	 * make use of more efficient SMI operations
+	 */
+	err = mv88e6xxx_smi_init(chip, chip->bus, chip->sw_addr);
+	if (err)
+		return err;
+
 	dev_info(chip->dev, "switch 0x%x detected: %s, revision %u\n",
 		 chip->info->prod_num, chip->info->name, rev);
 
