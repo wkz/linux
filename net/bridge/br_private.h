@@ -78,7 +78,6 @@ struct bridge_mcast_own_query {
 /* other querier */
 struct bridge_mcast_other_query {
 	struct timer_list		timer;
-	struct timer_list		delay_timer;
 };
 
 /* selected querier */
@@ -1153,8 +1152,7 @@ __br_multicast_querier_exists(struct net_bridge_mcast *brmctx,
 		own_querier_enabled = false;
 	}
 
-	return !timer_pending(&querier->delay_timer) &&
-	       (own_querier_enabled || timer_pending(&querier->timer));
+	return own_querier_enabled || timer_pending(&querier->timer);
 }
 
 static inline bool br_multicast_querier_exists(struct net_bridge_mcast *brmctx,
