@@ -966,6 +966,7 @@ static int _zl80732_firmware_parse_line(struct zl80732 *zl80732,
 	u32 delay;
 	u16 addr;
 
+	mutex_lock(zl80732->lock);
 	switch (tmp[0]) {
 	case 'X':
 		/* The line looks like this:
@@ -1006,6 +1007,7 @@ static int _zl80732_firmware_parse_line(struct zl80732 *zl80732,
 	default:
 		break;
 	}
+	mutex_unlock(zl80732->lock);
 
 	return err;
 }
