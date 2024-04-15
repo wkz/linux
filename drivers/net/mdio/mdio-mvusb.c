@@ -16,49 +16,111 @@ static const struct usb_device_id mvusb_mdio_table[] = {
 MODULE_DEVICE_TABLE(usb, mvusb_mdio_table);
 
 enum {
-	MVUSB_CMD_PREAMBLE0,
-	MVUSB_CMD_PREAMBLE1,
-	MVUSB_CMD_ADDR,
-	MVUSB_CMD_VAL,
+	MVUSB_C22_PREAMBLE0,
+	MVUSB_C22_PREAMBLE1,
+	MVUSB_C22_ADDR,
+	MVUSB_C22_VAL,
+};
+
+enum {
+	MVUSB_C45_PREAMBLE0,
+	MVUSB_C45_PREAMBLE1,
+	MVUSB_C45_PREAMBLE2,
+	MVUSB_C45_PREAMBLE3,
+	MVUSB_C45_REG_CMD,
+	MVUSB_C45_REG,
+	MVUSB_C45_CMD,
+	MVUSB_C45_VAL,
 };
 
 struct mvusb_mdio {
 	struct usb_device *udev;
 	struct mii_bus *mdio;
 
-	__le16 buf[4];
+	__le16 rst[2];
+	__le16 c22[4];
+	__le16 c45[8];
 };
 
-static int mvusb_mdio_read(struct mii_bus *mdio, int dev, int reg)
+static int mvusb_mdio_do(struct mii_bus *mdio, void *tx, size_t txlen,
+			 void *rx, size_t rxlen)
 {
 	struct mvusb_mdio *mvusb = mdio->priv;
 	int err, alen;
 
-	mvusb->buf[MVUSB_CMD_ADDR] = cpu_to_le16(0xa400 | (dev << 5) | reg);
-
 	err = usb_bulk_msg(mvusb->udev, usb_sndbulkpipe(mvusb->udev, 2),
-			   mvusb->buf, 6, &alen, 100);
+			   tx, txlen, &alen, 100);
 	if (err)
 		return err;
 
-	err = usb_bulk_msg(mvusb->udev, usb_rcvbulkpipe(mvusb->udev, 6),
-			   &mvusb->buf[MVUSB_CMD_VAL], 2, &alen, 100);
-	if (err)
-		return err;
+	if (!rx)
+		return 0;
 
-	return le16_to_cpu(mvusb->buf[MVUSB_CMD_VAL]);
+	return usb_bulk_msg(mvusb->udev, usb_rcvbulkpipe(mvusb->udev, 6),
+			    rx, rxlen, &alen, 100);
 }
 
-static int mvusb_mdio_write(struct mii_bus *mdio, int dev, int reg, u16 val)
+static int mvusb_mdio_read_c22(struct mii_bus *mdio, int dev, int reg)
 {
 	struct mvusb_mdio *mvusb = mdio->priv;
-	int alen;
+	int err;
 
-	mvusb->buf[MVUSB_CMD_ADDR] = cpu_to_le16(0x8000 | (dev << 5) | reg);
-	mvusb->buf[MVUSB_CMD_VAL]  = cpu_to_le16(val);
+	mvusb->c22[MVUSB_C22_ADDR] = cpu_to_le16(0xa400 | (dev << 5) | reg);
 
-	return usb_bulk_msg(mvusb->udev, usb_sndbulkpipe(mvusb->udev, 2),
-			    mvusb->buf, 8, &alen, 100);
+	err = mvusb_mdio_do(mdio, mvusb->c22, 6, &mvusb->c22[MVUSB_C22_VAL], 2);
+
+	return err ? : le16_to_cpu(mvusb->c22[MVUSB_C22_VAL]);
+}
+
+static int mvusb_mdio_write_c22(struct mii_bus *mdio, int dev, int reg, u16 val)
+{
+	struct mvusb_mdio *mvusb = mdio->priv;
+
+	mvusb->c22[MVUSB_C22_ADDR] = cpu_to_le16(0x8000 | (dev << 5) | reg);
+	mvusb->c22[MVUSB_C22_VAL]  = cpu_to_le16(val);
+
+	return mvusb_mdio_do(mdio, mvusb->c22, 8, NULL, 0);
+}
+
+int mvusb_mdio_read_c45(struct mii_bus *mdio, int addr, int devnum, int regnum)
+{
+	struct mvusb_mdio *mvusb = mdio->priv;
+	int err;
+
+	mvusb->c45[MVUSB_C45_REG_CMD] = cpu_to_le16(0x8800 | (addr << 5) | devnum);
+	mvusb->c45[MVUSB_C45_REG] = cpu_to_le16(regnum);
+	mvusb->c45[MVUSB_C45_CMD] = cpu_to_le16(0xb000 | (addr << 5) | devnum);
+
+	err = mvusb_mdio_do(mdio, mvusb->c45, 14, &mvusb->c45[MVUSB_C45_VAL], 2);
+
+	return err ? : le16_to_cpu(mvusb->c45[MVUSB_C45_VAL]);
+}
+
+int mvusb_mdio_write_c45(struct mii_bus *mdio, int addr, int devnum,
+			 int regnum, u16 val)
+{
+	struct mvusb_mdio *mvusb = mdio->priv;
+
+	mvusb->c45[MVUSB_C45_REG_CMD] = cpu_to_le16(0x8800 | (addr << 5) | devnum);
+	mvusb->c45[MVUSB_C45_REG] = cpu_to_le16(regnum);
+	mvusb->c45[MVUSB_C45_CMD] = cpu_to_le16(0x8c00 | (addr << 5) | devnum);
+	mvusb->c45[MVUSB_C45_VAL] = cpu_to_le16(val);
+
+	return mvusb_mdio_do(mdio, mvusb->c45, 16, NULL, 0);
+}
+
+int mvusb_mdio_reset(struct mii_bus *mdio)
+{
+	struct mvusb_mdio *mvusb = mdio->priv;
+	int err;
+
+	mvusb->rst[0] = cpu_to_le16(0xe004);
+	err = mvusb_mdio_do(mdio, mvusb->rst, 2, &mvusb->rst[1], 2);
+	if (err)
+		return err;
+
+	mvusb->rst[0] = cpu_to_le16(0xc004);
+	return mvusb_mdio_do(mdio, mvusb->rst, 4, NULL, 0);
 }
 
 static int mvusb_mdio_probe(struct usb_interface *interface,
@@ -78,14 +140,21 @@ static int mvusb_mdio_probe(struct usb_interface *interface,
 	mvusb->udev = usb_get_dev(interface_to_usbdev(interface));
 
 	/* Reversed from USB PCAPs, no idea what these mean. */
-	mvusb->buf[MVUSB_CMD_PREAMBLE0] = cpu_to_le16(0xe800);
-	mvusb->buf[MVUSB_CMD_PREAMBLE1] = cpu_to_le16(0x0001);
+	mvusb->c22[MVUSB_C22_PREAMBLE0] = cpu_to_le16(0xe800);
+	mvusb->c22[MVUSB_C22_PREAMBLE1] = cpu_to_le16(0x0001);
+	mvusb->c45[MVUSB_C45_PREAMBLE0] = cpu_to_le16(0xc008);
+	mvusb->c45[MVUSB_C45_PREAMBLE1] = cpu_to_le16(0x0010);
+	mvusb->c45[MVUSB_C45_PREAMBLE2] = cpu_to_le16(0xc009);
+	mvusb->c45[MVUSB_C45_PREAMBLE3] = cpu_to_le16(0x0002);
 
 	snprintf(mdio->id, MII_BUS_ID_SIZE, "mvusb-%s", dev_name(dev));
 	mdio->name = mdio->id;
 	mdio->parent = dev;
-	mdio->read = mvusb_mdio_read;
-	mdio->write = mvusb_mdio_write;
+	mdio->read = mvusb_mdio_read_c22;
+	mdio->write = mvusb_mdio_write_c22;
+	mdio->read_c45 = mvusb_mdio_read_c45;
+	mdio->write_c45 = mvusb_mdio_write_c45;
+	mdio->reset = mvusb_mdio_reset;
 
 	usb_set_intfdata(interface, mvusb);
 	ret = of_mdiobus_register(mdio, dev->of_node);
