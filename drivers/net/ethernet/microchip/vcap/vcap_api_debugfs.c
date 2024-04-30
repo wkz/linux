@@ -133,7 +133,8 @@ static void vcap_debugfs_show_rule_keyfield(struct vcap_control *vctrl,
 		value = (u8 *)(&data->u32.value);
 		mask = (u8 *)(&data->u32.mask);
 
-		if (key == VCAP_KF_L3_IP4_SIP || key == VCAP_KF_L3_IP4_DIP) {
+		if (key == VCAP_KF_L3_IP4_SIP || key == VCAP_KF_L3_IP4_DIP ||
+		    key == VCAP_KF_IP4_XIP) {
 			out->prf(out->dst, "%pI4h/%pI4h", &data->u32.value,
 				 &data->u32.mask);
 		} else if (key == VCAP_KF_ETYPE ||
@@ -226,6 +227,10 @@ vcap_debugfs_show_rule_actionfield(struct vcap_control *vctrl,
 		out->prf(out->dst, "%d", value[0]);
 		break;
 	case VCAP_FIELD_U32:
+		if (action == VCAP_AF_MAC_LSB || action == VCAP_AF_MAC_MSB) {
+			hex = true;
+			break;
+		}
 		fmsk = GENMASK(actionfield[action].width - 1, 0);
 		val = *(u32 *)value;
 		out->prf(out->dst, "%u", val & fmsk);
