@@ -1014,6 +1014,12 @@ static int mchp_sparx5_probe(struct platform_device *pdev)
 		goto cleanup_ports;
 	}
 
+	err = sparx5_rr_router_init(sparx5);
+	if (err) {
+		dev_err(sparx5->dev, "Router initialization failed\n");
+		goto cleanup_ports;
+	}
+
 	err = sparx5_qos_init(sparx5);
 	if (err) {
 		dev_err(sparx5->dev, "Failed to initialize QoS\n");
@@ -1064,6 +1070,7 @@ static int mchp_sparx5_remove(struct platform_device *pdev)
 	}
 
 	sparx5_ptp_deinit(sparx5);
+	sparx5_rr_router_deinit(sparx5);
 	ops->fdma_stop(sparx5);
 	sparx5_cleanup_ports(sparx5);
 	sparx5_vcap_destroy(sparx5);
@@ -1131,6 +1138,8 @@ static const struct sparx5_match_data sparx5_desc = {
 		.lb_cnt = 4616,
 		.tod_pin = 4,
 		.fdma_db_cnt = 15,
+		.vmid_cnt = 511,
+		.arp_tbl_cnt = 2048,
 		.vcaps = sparx5_vcaps,
 		.vcaps_cfg = sparx5_vcap_inst_cfg,
 		.vcap_stats = &sparx5_vcap_stats,

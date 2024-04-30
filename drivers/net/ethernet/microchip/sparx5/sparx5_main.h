@@ -161,6 +161,10 @@ extern const u8 ifh_smac[];
 
 #define SPARX5_MAX_PTP_ID		512
 
+/* Must be maximum values across all L3 enabled platforms */
+#define SPARX5_ROUTER_LEG_N_VMID 511
+#define SPARX5_ARP_TBL_SIZE 2047
+
 struct sparx5;
 
 /* For each hardware DB there is an entry in this list and when the HW DB
@@ -430,6 +434,8 @@ struct sparx5 {
 	/* Time Aware Shaper */
 	struct mutex tas_lock;
 	bool is_pcie_device;
+	/* L3 Forwarding */
+	struct sparx5_router *router;
 };
 
 struct sparx5_calendar_data {
@@ -546,6 +552,8 @@ struct sparx5_consts {
 	int lb_cnt;
 	int tod_pin;
 	int fdma_db_cnt;
+	int vmid_cnt;
+	int arp_tbl_cnt;
 	const struct sparx5_vcap_inst *vcaps_cfg;
 	const struct vcap_info *vcaps;
 	const struct vcap_statistics *vcap_stats;
@@ -652,6 +660,36 @@ int sparx5_vlan_vid_add(struct sparx5_port *port, u16 vid, bool pvid,
 			bool untagged);
 int sparx5_vlan_vid_del(struct sparx5_port *port, u16 vid);
 void sparx5_vlan_port_apply(struct sparx5 *sparx5, struct sparx5_port *port);
+
+/* sparx5_router.c */
+int sparx5_rr_router_init(struct sparx5 *sparx5);
+void sparx5_rr_router_deinit(struct sparx5 *sparx5);
+
+struct sparx5_router {
+	struct sparx5 *sparx5;
+	struct notifier_block fib_nb;
+	struct notifier_block netevent_nb;
+	struct notifier_block inetaddr_nb;
+	struct notifier_block inetaddr_valid_nb;
+	struct notifier_block netdevice_nb;
+	struct rhashtable neigh_ht;
+	struct rhashtable nexthop_group_ht;
+	struct rhashtable nexthop_ht;
+	struct rhashtable fib_ht;
+
+	struct list_head fib_lpm_list;
+	struct list_head nexthop_list;
+	struct mutex lock; /* Global router lock for all shared data. */
+
+	struct workqueue_struct *sparx5_router_owq;
+
+	atomic_t legs_count;
+	struct list_head leg_list;
+	/* Track allocated router leg indices in hw */
+	DECLARE_BITMAP(vmid_mask, SPARX5_ROUTER_LEG_N_VMID);
+	/* Track allocated arp table indices in hw */
+	DECLARE_BITMAP(arp_tbl_mask, SPARX5_ARP_TBL_SIZE);
+};
 
 /* sparx5_calendar.c */
 int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
