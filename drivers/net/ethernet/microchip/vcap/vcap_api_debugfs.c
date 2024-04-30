@@ -226,7 +226,7 @@ vcap_debugfs_show_rule_actionfield(struct vcap_control *vctrl,
 		out->prf(out->dst, "%d", value[0]);
 		break;
 	case VCAP_FIELD_U32:
-		fmsk = (1 << actionfield[action].width) - 1;
+		fmsk = GENMASK(actionfield[action].width - 1, 0);
 		val = *(u32 *)value;
 		out->prf(out->dst, "%u", val & fmsk);
 		break;
