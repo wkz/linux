@@ -326,7 +326,14 @@ static int rx_buffer_add_to_ufdma(u8 *data, gfp_t flags)
     // functionality, but let all extracted frames go to the vtss.ifh interface.
     // This means that we must set a small value for this one and let the
     // application set a large value for SO_RCVBUF.
-    if ((skb = __build_skb(data, 1000)) == NULL) {
+    // The application has increased SO_RCVBUF meaning that it is safe to
+    // increase also this. In the network stack it is expected that skb->len it
+    // is smaller than skb->truesize. Because skb->truesize is the size of the
+    // allocated data for  skb + sizeof(sk_buff) + sizeof(skb_shared_info).
+    // And if received a frame that is mtu size (for example 1500) then the
+    // truesize will be smaller and skb->len. So to fix this make sure to set
+    // the correct truesize by passing the correct max skb size.
+    if ((skb = __build_skb(data, priv->rx_mtu_cur)) == NULL) {
         T_E("Unable to allocate Rx SKB");
         return -ENOMEM;
     }
