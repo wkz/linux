@@ -291,11 +291,13 @@
 			interrupts = <11>, // VCore SW0
 				     <0>,
 				     <13>,<14>,<15>,
-				     <22>,<23>,<28>;
+				     <22>,<23>,<28>,
+				     <16>;
 			interrupt-names = "master",
 					  "dev_all",
 					  "sgpio0", "sgpio1", "sgpio2",
-					  "ptp_rdy", "ptp_sync", "oam_vop";
+					  "ptp_rdy", "ptp_sync", "oam_vop",
+					  "gpio";
 			status = "disabled";
 		};
 

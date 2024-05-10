@@ -257,10 +257,10 @@
 			reg-names = "origin1_2";
 			interrupt-parent = <&intc>;
 			interrupts = <10>, // VCore SW0
-				     <0>, <12>,
+				     <0>, <12>, <13>,
 				     <17>, <18>, <19>;
 			interrupt-names = "master",
-					  "dev_all", "sgpio0",
+					  "dev_all", "sgpio0", "gpio",
 					  "oam_vop", "ptp_rdy", "ptp_sync";
 			status = "disabled";
 		};

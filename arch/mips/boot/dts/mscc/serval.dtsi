@@ -203,10 +203,12 @@
 			interrupt-parent = <&intc>;
 			interrupts = <9>, // VCore SW0
 				     <0>, <1>, <11>,
-				     <16>, <17>, <18>;
+				     <16>, <17>, <18>,
+				     <12>;
 			interrupt-names = "master",
 					  "dev_all", "ext_src0", "sgpio0",
-					  "oam_vop", "ptp_rdy", "ptp_sync";
+					  "oam_vop", "ptp_rdy", "ptp_sync",
+					  "gpio";
 			status = "disabled";
 		};
 
