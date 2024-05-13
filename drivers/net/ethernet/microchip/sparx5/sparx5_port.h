@@ -90,6 +90,8 @@ int sparx5_serdes_set(struct sparx5 *sparx5,
 		      struct sparx5_port *spx5_port,
 		      struct sparx5_port_config *conf);
 
+struct net_device *sparx5_port_get_ndev(struct sparx5 *sparx5);
+
 struct sparx5_port_status {
 	bool link;
 	bool link_down;

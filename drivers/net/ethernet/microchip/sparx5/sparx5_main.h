@@ -665,6 +665,11 @@ void sparx5_vlan_port_apply(struct sparx5 *sparx5, struct sparx5_port *port);
 int sparx5_rr_router_init(struct sparx5 *sparx5);
 void sparx5_rr_router_deinit(struct sparx5 *sparx5);
 
+struct sparx5_rr_hw_route {
+	u32 vrule_id;
+	bool vrule_id_valid;
+};
+
 struct sparx5_router {
 	struct sparx5 *sparx5;
 	struct notifier_block fib_nb;
@@ -672,13 +677,15 @@ struct sparx5_router {
 	struct notifier_block inetaddr_nb;
 	struct notifier_block inetaddr_valid_nb;
 	struct notifier_block netdevice_nb;
+	struct notifier_block inet6addr_nb;
+	struct notifier_block inet6addr_valid_nb;
 	struct rhashtable neigh_ht;
-	struct rhashtable nexthop_group_ht;
-	struct rhashtable nexthop_ht;
 	struct rhashtable fib_ht;
+	struct sparx5_rr_hw_route link_local; /* Trap all link-local traffic. */
+	struct net_device *port_dev; /* For VCAP API. */
 
-	struct list_head fib_lpm_list;
-	struct list_head nexthop_list;
+	struct list_head fib_lpm4_list;
+	struct list_head fib_lpm6_list;
 	struct mutex lock; /* Global router lock for all shared data. */
 
 	struct workqueue_struct *sparx5_router_owq;

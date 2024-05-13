@@ -7,17 +7,22 @@
 #include <linux/etherdevice.h>
 #include <linux/if_bridge.h>
 #include <linux/if_ether.h>
+#include <linux/inet.h>
 #include <linux/inetdevice.h>
 #include <linux/list.h>
-#include <linux/refcount.h>
 #include <linux/rhashtable.h>
+#include <net/addrconf.h>
 #include <net/arp.h>
 #include <net/fib_notifier.h>
+#include <net/ip6_fib.h>
+#include <net/ipv6.h>
+#include <net/ndisc.h>
 #include <net/neighbour.h>
 #include <net/netevent.h>
 #include <net/nexthop.h>
 
 #include "sparx5_main.h"
+#include "sparx5_port.h"
 
 /* The main routing objects are
  *
@@ -112,6 +117,8 @@
  *    Therefore, we install a direct route for 1.0.10.1/32 in the LPM VCAP, with
  *    zero mac.
  *
+ * 4) All IPv6 link-local traffic is explicitly trapped.
+ *
  * On the hardware side, we use the VCAP LPM and ARP table for UC IPv4 routing.
  * HW picks the match found at the highest address in the VCAP LPM. To ensure the
  * longest prefix match we make sure to order the entries according to mask
@@ -143,13 +150,31 @@
 
 #define SPARX5_MAX_ECMP_SIZE 16
 #define SPARX5_RLEG_USE_GLOBAL_BASE_MAC 2
+#define SPARX5_LINK_LOCAL_PREFIX_LEN 64
+
+struct sparx5_rr_fib6_entry_info {
+	struct fib6_info **rt_arr;
+	unsigned int nrt6;
+};
+
+enum sparx5_rr_l3_version {
+	SPARX5_IPV4 = 0,
+	SPARX5_IPV6,
+};
+
+#define SPARX5_IADDR_LEN(v) ((v) == SPARX5_IPV4 ? 32 : 128)
+
+struct sparx5_rr_fib_info {
+	union {
+		struct fib_entry_notifier_info fen4_info;
+		struct sparx5_rr_fib6_entry_info fe6_info;
+	};
+	enum sparx5_rr_l3_version version;
+};
 
 struct sparx5_fib_event_work {
 	struct work_struct work;
-	union {
-		/* Expand for ipv6 and other fib event payload types */
-		struct fib_entry_notifier_info fen_info;
-	};
+	struct sparx5_rr_fib_info fi;
 	struct sparx5 *sparx5;
 	unsigned long event;
 };
@@ -175,17 +200,7 @@ struct sparx5_iaddr {
 		__be32 ipv4;
 		struct in6_addr ipv6;
 	}; /* Must be first */
-	enum {
-		SPARX5_IPV4 = 0,
-		SPARX5_IPV6,
-	} version;
-};
-
-#define SPARX5_IADDR_LEN(v) ((v) == SPARX5_IPV4 ? 32 : 128)
-
-struct sparx5_rr_hw_route {
-	u32 vrule_id;
-	bool vrule_id_valid;
+	enum sparx5_rr_l3_version version;
 };
 
 struct sparx5_rr_neigh_entry {
@@ -196,9 +211,7 @@ struct sparx5_rr_neigh_entry {
 	struct rhash_head ht_node;
 	struct sparx5_rr_fib_entry *fib_entry;
 	struct list_head fib_list_node; /* Fib route for this neighbour */
-	struct sparx5_port *lower_port; /* Need ref to a physical port below
-					 * neigh egress dev.
-					 */
+	struct neigh_table *neigh_tbl; /* Kernel neighbour table */
 	struct list_head nexthop_list; /* Nexthops using this neigh entry */
 	struct sparx5_rr_hw_route hw_route;
 	unsigned char hwaddr[ETH_ALEN];
@@ -211,6 +224,7 @@ struct sparx5_rr_nexthop {
 	struct sparx5_rr_nexthop_group *grp;
 	struct list_head neigh_list_node; /* Neigh entry member */
 	struct list_head leg_list_node; /* Router leg member */
+	struct neigh_table *neigh_tbl; /* Kernel neighbour table */
 	struct sparx5_iaddr gw_addr;
 	int ifindex;
 	bool gateway;
@@ -253,17 +267,217 @@ struct sparx5_rr_fib_entry {
 	struct list_head neigh_list; /* Neighbours under this route */
 	struct sparx5_rr_hw_route hw_route;
 	struct sparx5_rr_nexthop_group *nh_grp;
-	struct sparx5_port *lower_port; /* For VCAP API */
-	struct fib_entry_notifier_info fen4_info;
+	struct sparx5_rr_fib_info fi;
 	u64 sort_key; /* For sw lpm lookup */
 	bool trap;
 	bool offload_fail;
 };
 
+struct sparx5_rr_inet6addr_event_work {
+	struct work_struct work;
+	struct sparx5 *sparx5;
+	struct net_device *dev;
+	unsigned long event;
+};
+
+static int sparx5_rr_addr_fmt(struct sparx5_iaddr *addr, char *buf, size_t len)
+{
+	switch (addr->version) {
+	case SPARX5_IPV4:
+		return snprintf(buf, len, "%pI4b", addr);
+	case SPARX5_IPV6:
+		return snprintf(buf, len, "%pI6c", addr);
+	default:
+		WARN_ON(1);
+		return snprintf(buf, len, "N/A");
+	}
+}
+
+static void sparx5_rr_neigh_debug(struct sparx5 *sparx5,
+				  struct sparx5_rr_neigh_entry *entry,
+				  char *msg)
+{
+	char nip[INET6_ADDRSTRLEN];
+
+	sparx5_rr_addr_fmt(&entry->key.iaddr, nip, ARRAY_SIZE(nip));
+
+	dev_dbg(sparx5->dev,
+		"Neigh entry %s vmid=%u mac=%pM ip=%s connected=%d\n", msg,
+		entry->vmid, entry->hwaddr, nip, entry->connected);
+}
+
+static void sparx5_rr_fib_link_debug(struct sparx5 *sparx5,
+				     struct sparx5_rr_neigh_entry *entry,
+				     struct sparx5_rr_fib_entry *fib_entry)
+{
+	char nip[INET6_ADDRSTRLEN], fip[INET6_ADDRSTRLEN];
+
+	sparx5_rr_addr_fmt(&entry->key.iaddr, nip, ARRAY_SIZE(nip));
+	sparx5_rr_addr_fmt(&fib_entry->key.addr, fip, ARRAY_SIZE(fip));
+
+	dev_dbg(sparx5->dev, "Fib link fib=%s/%u -> neigh=%s mac=%pM\n", fip,
+		fib_entry->key.prefix_len, nip, entry->hwaddr);
+}
+
+static void sparx5_rr_fib_debug(struct sparx5 *sparx5,
+				struct sparx5_rr_fib_entry *fib_entry,
+				char *msg)
+{
+	char fip[INET6_ADDRSTRLEN];
+
+	sparx5_rr_addr_fmt(&fib_entry->key.addr, fip, ARRAY_SIZE(fip));
+
+	dev_dbg(sparx5->dev, "Fib entry %s ip=%s/%d type=%d nhs=%u\n", msg, fip,
+		fib_entry->key.prefix_len, fib_entry->type,
+		fib_entry->nh_grp->nhgi->count);
+}
+
 static void sparx5_rr_schedule_work(struct sparx5 *sparx5,
 				    struct work_struct *work)
 {
 	queue_work(sparx5->router->sparx5_router_owq, work);
+}
+
+static void sparx5_rr_fib_info_init(struct sparx5_rr_fib_info *fi,
+				    enum sparx5_rr_l3_version version)
+{
+	fi->version = version;
+
+	switch (version) {
+	case SPARX5_IPV4:
+		fi->fen4_info.fi = NULL;
+		return;
+	case SPARX5_IPV6:
+		fi->fe6_info.nrt6 = 0;
+		fi->fe6_info.rt_arr = NULL;
+		return;
+	}
+}
+
+/* Return number of nexthops. */
+static int sparx5_rr_fib_info_nhs(struct sparx5_rr_fib_info *fi)
+{
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		return fib_info_num_path(fi->fen4_info.fi);
+	case SPARX5_IPV6:
+		return fi->fe6_info.nrt6;
+	default:
+		WARN_ON(1);
+		return 0;
+	}
+}
+
+static struct fib_nh_common *
+sparx5_rr_fib_info_nhc(struct sparx5_rr_fib_info *fi, int nhsel)
+{
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		return fib_info_nhc(fi->fen4_info.fi, nhsel);
+	case SPARX5_IPV6:
+		return &fi->fe6_info.rt_arr[nhsel]->fib6_nh->nh_common;
+	default:
+		WARN_ON(1);
+		return NULL;
+	}
+}
+
+static bool sparx5_rr_fib_info_is_nh_obj(struct sparx5_rr_fib_info *fi)
+{
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		return !!fi->fen4_info.fi->nh;
+	case SPARX5_IPV6:
+		return !!fi->fe6_info.rt_arr[0]->nh;
+	default:
+		WARN_ON(1);
+		return false;
+	}
+}
+
+static u8 sparx5_rr_fib_info_type(struct sparx5_rr_fib_info *fi)
+{
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		return fi->fen4_info.type;
+	case SPARX5_IPV6:
+		return fi->fe6_info.rt_arr[0]->fib6_type;
+	default:
+		WARN_ON(1);
+		return RTN_UNSPEC;
+	}
+}
+
+static u32 sparx5_rr_fib_info_tb_id(struct sparx5_rr_fib_info *fi)
+{
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		return fi->fen4_info.tb_id;
+	case SPARX5_IPV6:
+		return fi->fe6_info.rt_arr[0]->fib6_table->tb6_id;
+	default:
+		WARN_ON(1);
+		return RT_TABLE_UNSPEC;
+	}
+}
+
+static bool sparx5_rr_fib6_rt_should_ignore(struct fib6_info *rt)
+{
+	int addr_type = ipv6_addr_type(&rt->fib6_dst.addr);
+
+	if (addr_type & (IPV6_ADDR_MULTICAST | IPV6_ADDR_LINKLOCAL))
+		return true;
+
+	return false;
+}
+
+static bool sparx5_rr_fib_info_should_ignore(struct sparx5_rr_fib_info *fi)
+{
+	struct fib6_info *rt;
+
+	if (fi->version == SPARX5_IPV4)
+		return false;
+
+	rt = fi->fe6_info.rt_arr[0];
+
+	return sparx5_rr_fib6_rt_should_ignore(rt);
+}
+
+#if IS_ENABLED(CONFIG_IPV6)
+static void sparx5_rr_rt6_release(struct fib6_info *rt)
+{
+	if (!rt->nh)
+		rt->fib6_nh->fib_nh_flags &= ~RTNH_F_OFFLOAD;
+
+	fib6_info_release(rt);
+}
+#else
+static void sparx5_rr_rt6_release(struct fib6_info *rt)
+{
+}
+#endif
+
+static void sparx5_rr_fib6_info_put(struct sparx5_rr_fib6_entry_info *fi)
+{
+	for (int i = 0; i < fi->nrt6; i++)
+		sparx5_rr_rt6_release(fi->rt_arr[i]);
+
+	kfree(fi->rt_arr);
+	fi->nrt6 = 0;
+	fi->rt_arr = NULL;
+}
+
+static void sparx5_rr_fib_info_put(struct sparx5_rr_fib_info *fi)
+{
+	if (fi->version == SPARX5_IPV4) {
+		if (fi->fen4_info.fi) {
+			fib_info_put(fi->fen4_info.fi);
+			fi->fen4_info.fi = NULL;
+		}
+		return;
+	}
+
+	sparx5_rr_fib6_info_put(&fi->fe6_info);
 }
 
 static void sparx5_rr_split_mac(unsigned char mac[ETH_ALEN], u32 split,
@@ -322,6 +536,9 @@ static void sparx5_rr_nb2neigh_key(struct neighbour *n,
 {
 	memset(key, 0, sizeof(*key));
 
+	/* The primary_key, tbl->family and dev are constant for the lifetime of
+	 * the neighbour, so we can read them without n->lock.
+	 */
 	if (n->tbl->family == AF_INET) {
 		key->iaddr.version = SPARX5_IPV4;
 		key->iaddr.ipv4 = *(__be32 *)n->primary_key;
@@ -339,7 +556,11 @@ sparx5_rr_neigh_entry_offload_mark(struct sparx5_rr_neigh_entry *entry,
 {
 	struct neighbour *n;
 
-	n = neigh_lookup(&arp_tbl, &entry->key.iaddr.ipv4, entry->key.dev);
+	if (!entry->neigh_tbl)
+		return;
+
+	n = neigh_lookup(entry->neigh_tbl, &entry->key.iaddr.ipv4,
+			 entry->key.dev);
 	if (!n)
 		return;
 
@@ -365,38 +586,84 @@ static const struct rhashtable_params sparx5_rr_fib_entry_ht_params = {
 	.automatic_shrinking = true,
 };
 
+static bool sparx5_rr_iaddr_equal(struct sparx5_iaddr *a1,
+				  struct sparx5_iaddr *a2)
+{
+	if (a1->version != a2->version)
+		return false;
+
+	if (a1->version == SPARX5_IPV4)
+		return a1->ipv4 == a2->ipv4;
+
+	return !ipv6_addr_cmp(&a1->ipv6, &a2->ipv6);
+}
+
+static u16 sparx5_rr_iaddr_proto(struct sparx5_iaddr *iaddr)
+{
+	switch (iaddr->version) {
+	case SPARX5_IPV4:
+		return ETH_P_IP;
+	case SPARX5_IPV6:
+		return ETH_P_IPV6;
+	default:
+		WARN_ON(1);
+		return 0;
+	}
+}
+
 static bool
-sparx5_rr_nexthop4_group_has_nexthop(struct sparx5_rr_nexthop_group *nh_grp,
-				     __be32 gw, int ifindex)
+sparx5_rr_nexthop_group_has_nexthop(struct sparx5_rr_nexthop_group *nh_grp,
+				    struct sparx5_iaddr *addr, int ifindex)
 {
 	for (u8 i = 0; i < nh_grp->nhgi->count; i++) {
 		struct sparx5_rr_nexthop *nh;
 
 		nh = &nh_grp->nhgi->nexthops[i];
-		if (nh->ifindex == ifindex && nh->gw_addr.ipv4 == gw)
+		if (nh->ifindex == ifindex &&
+		    sparx5_rr_iaddr_equal(&nh->gw_addr, addr))
 			return true;
 	}
 
 	return false;
 }
 
-static bool
-sparx5_rr_nexthop4_group_equal(struct sparx5_rr_nexthop_group *nh_grp,
-			       struct fib_info *fi)
+static void sparx5_rr_fib_nhc_to_gw(struct fib_nh_common *nhc,
+				    enum sparx5_rr_l3_version version,
+				    struct sparx5_iaddr *gw)
 {
-	u8 nhs = fib_info_num_path(fi);
+	gw->version = version;
+
+	switch (version) {
+	case SPARX5_IPV4:
+		gw->ipv4 = nhc->nhc_gw.ipv4;
+		break;
+	case SPARX5_IPV6:
+		gw->ipv6 = nhc->nhc_gw.ipv6;
+		break;
+	}
+}
+
+/* Return true iff fi contains exactly the same nexthops as nh_grp, modulo the
+ * order of nexthops.
+ */
+static bool
+sparx5_rr_fib_info_nh_group_equal(struct sparx5_rr_nexthop_group *nh_grp,
+				  struct sparx5_rr_fib_info *fi)
+{
+	u8 nhs = sparx5_rr_fib_info_nhs(fi);
+	struct sparx5_iaddr gw = { 0 };
 	struct fib_nh_common *nhc;
 	int ifindex;
-	__be32 gw;
 
 	if (nh_grp->nhgi->count != nhs)
 		return false;
 
 	for (u8 i = 0; i < nhs; i++) {
-		nhc = fib_info_nhc(fi, i);
+		nhc = sparx5_rr_fib_info_nhc(fi, i);
 		ifindex = nhc->nhc_dev->ifindex;
-		gw = nhc->nhc_gw.ipv4;
-		if (!sparx5_rr_nexthop4_group_has_nexthop(nh_grp, gw, ifindex))
+		sparx5_rr_fib_nhc_to_gw(nhc, fi->version, &gw);
+
+		if (!sparx5_rr_nexthop_group_has_nexthop(nh_grp, &gw, ifindex))
 			return false;
 	}
 
@@ -409,8 +676,8 @@ static u16 sparx5_rr_route_sort_key(u32 prefix_len)
 	return SPARX5_IADDR_LEN(SPARX5_IPV6) - prefix_len;
 }
 
-static void sparx5_rr_to_fib_key(struct sparx5 *sparx5, u32 dst, int dst_len,
-				 u32 tb_id, struct sparx5_rr_fib_key *key)
+static void sparx5_rr_to_fib4_key(u32 dst, int dst_len, u32 tb_id,
+				  struct sparx5_rr_fib_key *key)
 {
 	memset(key, 0, sizeof(*key));
 	key->addr.version = SPARX5_IPV4;
@@ -419,12 +686,35 @@ static void sparx5_rr_to_fib_key(struct sparx5 *sparx5, u32 dst, int dst_len,
 	key->tb_id = tb_id;
 }
 
-static void sparx5_rr_finfo_to_fib_key(struct sparx5 *sparx5,
-				       struct fib_entry_notifier_info *fen_info,
-				       struct sparx5_rr_fib_key *key)
+static void sparx5_rr_to_fib6_key(struct in6_addr *addr, int prefix_len,
+				  u32 tb_id, struct sparx5_rr_fib_key *key)
 {
-	sparx5_rr_to_fib_key(sparx5, fen_info->dst, fen_info->dst_len,
-			     fen_info->tb_id, key);
+	memset(key, 0, sizeof(*key));
+	key->addr.version = SPARX5_IPV6;
+	memcpy(&key->addr.ipv6, addr, sizeof(*addr));
+	key->prefix_len = prefix_len;
+	key->tb_id = tb_id;
+}
+
+static void sparx5_rr_fib_info_to_fib_key(struct sparx5_rr_fib_info *fi,
+					  struct sparx5_rr_fib_key *key)
+{
+	struct fib_entry_notifier_info *fen_info;
+	struct fib6_info *rt;
+
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		fen_info = &fi->fen4_info;
+		sparx5_rr_to_fib4_key(fen_info->dst, fen_info->dst_len,
+				      fen_info->tb_id, key);
+		return;
+	case SPARX5_IPV6:
+		rt = fi->fe6_info.rt_arr[0];
+
+		sparx5_rr_to_fib6_key(&rt->fib6_dst.addr, rt->fib6_dst.plen,
+				      rt->fib6_table->tb6_id, key);
+		return;
+	}
 }
 
 static bool
@@ -436,35 +726,106 @@ sparx5_rr_fib_entry_lpm4_match(__be32 addr,
 	return !((addr ^ fib_entry->key.addr.ipv4) & mask);
 }
 
-static struct sparx5_rr_fib_entry *
-sparx5_rr_fib_lpm4_lookup(struct sparx5 *sparx5, __be32 addr)
+static void sparx5_rr_inet6_make_mask(int logmask, struct in6_addr *mask)
 {
+	/* Caller must ensure 0 <= logmask <= 128 */
+	int rem, byte_prefix = logmask;
+
+	rem = do_div(byte_prefix, BITS_PER_BYTE);
+
+	memset(mask, 0, sizeof(*mask));
+	memset(mask, 0xff, byte_prefix);
+
+	if (rem)
+		mask->in6_u.u6_addr8[byte_prefix] = GENMASK(7, 7 - rem + 1);
+}
+
+static void sparx5_rr_inet6_make_mask_le(int logmask, u8 *mask)
+{
+	/* Caller must ensure 0 <= logmask <= 128 */
+	int rem, byte_prefix = logmask;
+
+	rem = do_div(byte_prefix, BITS_PER_BYTE);
+
+	memset(mask, 0, 16);
+
+	for (int i = 0; i < byte_prefix; i++)
+		mask[15 - i] = 0xff;
+
+	if (rem)
+		mask[15 - byte_prefix] = GENMASK(7, 7 - rem + 1);
+}
+
+static bool
+sparx5_rr_fib_entry_lpm6_match(struct in6_addr *addr,
+			       struct sparx5_rr_fib_entry *fib_entry)
+{
+	struct in6_addr mask = { 0 };
+
+	sparx5_rr_inet6_make_mask(fib_entry->key.prefix_len, &mask);
+
+	return !ipv6_masked_addr_cmp(addr, &mask, &fib_entry->key.addr.ipv6);
+}
+
+static bool sparx5_rr_fib_entry_lpm_match(struct sparx5_iaddr *addr,
+					  struct sparx5_rr_fib_entry *fib_entry)
+{
+	switch (addr->version) {
+	case SPARX5_IPV4:
+		return sparx5_rr_fib_entry_lpm4_match(addr->ipv4, fib_entry);
+	case SPARX5_IPV6:
+		return sparx5_rr_fib_entry_lpm6_match(&addr->ipv6, fib_entry);
+	default:
+		WARN_ON(1);
+		return false;
+	}
+}
+
+static struct list_head *sparx5_rr_fib_lpm_get(struct sparx5 *sparx5,
+					       struct sparx5_iaddr *addr)
+{
+	switch (addr->version) {
+	case SPARX5_IPV4:
+		return &sparx5->router->fib_lpm4_list;
+	case SPARX5_IPV6:
+		return &sparx5->router->fib_lpm6_list;
+	default:
+		WARN_ON(1);
+		return NULL;
+	}
+}
+
+static struct sparx5_rr_fib_entry *
+sparx5_rr_fib_lpm_lookup(struct sparx5 *sparx5, struct sparx5_iaddr *addr)
+{
+	struct list_head *lpm_backend = sparx5_rr_fib_lpm_get(sparx5, addr);
 	struct sparx5_rr_fib_entry *iter;
 
-	list_for_each_entry(iter, &sparx5->router->fib_lpm_list, fib_lpm_node) {
-		if (sparx5_rr_fib_entry_lpm4_match(addr, iter))
+	list_for_each_entry(iter, lpm_backend, fib_lpm_node)
+		if (sparx5_rr_fib_entry_lpm_match(addr, iter))
 			return iter;
-	}
 
 	return NULL;
 }
 
 static bool
-sparx5_rr_fib_lpm4_is_interesting(struct sparx5_rr_fib_entry *fib_entry)
+sparx5_rr_fib_lpm_is_interesting(struct sparx5_rr_fib_entry *fib_entry)
 {
 	/* No need to search through local FIB entries */
 	return fib_entry->type == SPARX5_RR_FIB_TYPE_UNICAST;
 }
 
-static void sparx5_rr_fib_lpm4_insert(struct sparx5 *sparx5,
-				      struct sparx5_rr_fib_entry *fib_entry)
+static void sparx5_rr_fib_lpm_insert(struct sparx5 *sparx5,
+				     struct sparx5_rr_fib_entry *fib_entry)
 {
+	struct list_head *lpm_backend =
+		sparx5_rr_fib_lpm_get(sparx5, &fib_entry->key.addr);
 	struct sparx5_rr_fib_entry *iter, *next = NULL;
 
-	if (!sparx5_rr_fib_lpm4_is_interesting(fib_entry))
+	if (!sparx5_rr_fib_lpm_is_interesting(fib_entry))
 		return;
 
-	list_for_each_entry(iter, &sparx5->router->fib_lpm_list, fib_lpm_node) {
+	list_for_each_entry(iter, lpm_backend, fib_lpm_node) {
 		if (fib_entry->sort_key < iter->sort_key) {
 			next = iter;
 			break;
@@ -472,8 +833,7 @@ static void sparx5_rr_fib_lpm4_insert(struct sparx5 *sparx5,
 	}
 
 	if (!next) {
-		list_add_tail(&fib_entry->fib_lpm_node,
-			      &sparx5->router->fib_lpm_list);
+		list_add_tail(&fib_entry->fib_lpm_node, lpm_backend);
 		return;
 	}
 
@@ -481,12 +841,51 @@ static void sparx5_rr_fib_lpm4_insert(struct sparx5 *sparx5,
 	list_add_tail(&fib_entry->fib_lpm_node, &next->fib_lpm_node);
 }
 
-static void sparx5_rr_fib_lpm4_remove(struct sparx5_rr_fib_entry *fib_entry)
+static void sparx5_rr_fib_lpm_remove(struct sparx5_rr_fib_entry *fib_entry)
 {
-	if (!sparx5_rr_fib_lpm4_is_interesting(fib_entry))
+	if (!sparx5_rr_fib_lpm_is_interesting(fib_entry))
 		return;
 
 	list_del(&fib_entry->fib_lpm_node);
+}
+
+static int sparx5_rr_lpm_rule6_xip_add(struct vcap_rule *rule,
+				       struct sparx5_iaddr *addr,
+				       u32 prefix_len)
+{
+	struct vcap_u128_key addr_key;
+
+	/* HW value/mask must be little endian */
+	sparx5_rr_inet6_make_mask_le(prefix_len, addr_key.mask);
+
+	for (int i = 0; i < 16; i++)
+		addr_key.value[i] = addr->ipv6.s6_addr[15 - i];
+
+	return vcap_rule_add_key_u128(rule, VCAP_KF_IP6_XIP, &addr_key);
+}
+
+static int sparx5_rr_lpm_rule4_xip_add(struct vcap_rule *rule,
+				       struct sparx5_iaddr *addr,
+				       u32 prefix_len)
+{
+	u32 mask = ntohl(inet_make_mask(prefix_len));
+	u32 iaddr = ntohl(addr->ipv4);
+
+	return vcap_rule_add_key_u32(rule, VCAP_KF_IP4_XIP, iaddr, mask);
+}
+
+static int sparx5_rr_lpm_rule_xip_add(struct vcap_rule *rule,
+				      struct sparx5_iaddr *addr, u32 prefix_len)
+{
+	switch (addr->version) {
+	case SPARX5_IPV4:
+		return sparx5_rr_lpm_rule4_xip_add(rule, addr, prefix_len);
+	case SPARX5_IPV6:
+		return sparx5_rr_lpm_rule6_xip_add(rule, addr, prefix_len);
+	default:
+		WARN_ON(1);
+		return -EINVAL;
+	}
 }
 
 static struct sparx5_rr_router_leg *
@@ -573,11 +972,21 @@ static struct sparx5_port *sparx5_port_dev_lower_find_rcu(struct net_device *dev
 	return priv.data;
 }
 
+static struct sparx5_port *sparx5_port_dev_lower_find(struct net_device *dev)
+{
+	struct sparx5_port *port;
+
+	rcu_read_lock();
+	port = sparx5_port_dev_lower_find_rcu(dev);
+	rcu_read_unlock();
+
+	return port;
+}
+
 static struct sparx5_rr_neigh_entry *
 sparx5_rr_neigh_entry_alloc(struct sparx5 *sparx5,
 			    struct sparx5_rr_neigh_key *key,
-			    struct sparx5_rr_router_leg *leg,
-			    struct sparx5_port *port_below)
+			    struct sparx5_rr_router_leg *leg)
 {
 	struct sparx5_rr_neigh_entry *entry;
 
@@ -590,8 +999,21 @@ sparx5_rr_neigh_entry_alloc(struct sparx5 *sparx5,
 	entry->vmid = leg->vmid;
 	entry->hw_route.vrule_id = 0;
 	entry->hw_route.vrule_id_valid = false;
-	entry->lower_port = port_below;
 	entry->fib_entry = NULL;
+	entry->neigh_tbl = NULL;
+
+	switch (key->iaddr.version) {
+	case SPARX5_IPV4:
+		entry->neigh_tbl = &arp_tbl;
+		break;
+	case SPARX5_IPV6:
+#if IS_ENABLED(CONFIG_IPV6)
+		entry->neigh_tbl = &nd_tbl;
+		break;
+#else
+		return NULL;
+#endif
+	}
 
 	eth_zero_addr(entry->hwaddr);
 
@@ -601,17 +1023,27 @@ sparx5_rr_neigh_entry_alloc(struct sparx5 *sparx5,
 	return entry;
 }
 
+static bool sparx5_rr_addr_is_link_local(struct sparx5_iaddr *iaddr)
+{
+	if (iaddr->version != SPARX5_IPV6)
+		return false;
+
+	return ipv6_addr_type(&iaddr->ipv6) & IPV6_ADDR_LINKLOCAL;
+}
+
 static int sparx5_rr_neigh_entry_fib_link(struct sparx5 *sparx5,
 					  struct sparx5_rr_neigh_entry *entry)
 {
 	struct sparx5_rr_fib_entry *fib_entry;
 
-	fib_entry = sparx5_rr_fib_lpm4_lookup(sparx5, entry->key.iaddr.ipv4);
+	fib_entry = sparx5_rr_fib_lpm_lookup(sparx5, &entry->key.iaddr);
 	if (!fib_entry)
 		return -ENOENT;
 
 	list_add(&entry->fib_list_node, &fib_entry->neigh_list);
 	entry->fib_entry = fib_entry;
+
+	sparx5_rr_fib_link_debug(sparx5, entry, fib_entry);
 
 	return 0;
 }
@@ -625,9 +1057,7 @@ sparx5_rr_neigh_entry_create(struct sparx5 *sparx5,
 	struct sparx5_port *port_below;
 	int err;
 
-	rcu_read_lock();
-	port_below = sparx5_port_dev_lower_find_rcu(key->dev);
-	rcu_read_unlock();
+	port_below = sparx5_port_dev_lower_find(key->dev);
 	if (!port_below)
 		return ERR_PTR(-EINVAL);
 
@@ -635,7 +1065,7 @@ sparx5_rr_neigh_entry_create(struct sparx5 *sparx5,
 	if (!leg)
 		return ERR_PTR(-EINVAL);
 
-	entry = sparx5_rr_neigh_entry_alloc(sparx5, key, leg, port_below);
+	entry = sparx5_rr_neigh_entry_alloc(sparx5, key, leg);
 	if (!entry)
 		return ERR_PTR(-ENOMEM);
 
@@ -643,11 +1073,14 @@ sparx5_rr_neigh_entry_create(struct sparx5 *sparx5,
 	if (err)
 		goto err_insert;
 
+	/* Link neigh to the fib which owns the subnet. */
 	err = sparx5_rr_neigh_entry_fib_link(sparx5, entry);
 	if (err)
 		goto err_fib_link;
 
 	netdev_hold(entry->key.dev, NULL, GFP_KERNEL);
+
+	sparx5_rr_neigh_debug(sparx5, entry, "create");
 
 	return entry;
 
@@ -668,13 +1101,13 @@ static int sparx5_rr_nexthop_neigh_init(struct sparx5 *sparx5,
 	struct neighbour *n;
 	int err = 0;
 
-	if (!nh->gateway || nh->neigh_entry)
+	if (!nh->gateway || nh->neigh_entry || !nh->neigh_tbl)
 		return 0;
 
-	/* Look up neighbor in the global IPv4 neighbor table. Takes ref to n. */
-	n = neigh_lookup(&arp_tbl, &nh->gw_addr, dev);
+	/* Look up neighbor in the global neighbor table. Takes ref to n. */
+	n = neigh_lookup(nh->neigh_tbl, &nh->gw_addr, dev);
 	if (!n) {
-		n = neigh_create(&arp_tbl, &nh->gw_addr, dev);
+		n = neigh_create(nh->neigh_tbl, &nh->gw_addr, dev);
 		if (IS_ERR(n))
 			return PTR_ERR(n);
 		/* Start arp process */
@@ -712,9 +1145,7 @@ static void sparx5_rr_neigh_entry_destroy(struct sparx5 *sparx5,
 	sparx5_rr_neigh_entry_remove(sparx5, entry);
 	netdev_put(entry->key.dev, NULL);
 
-	dev_dbg(sparx5->dev,
-		"Neigh entry destroyed vmid=%u mac=%pM ipv4=%pI4b\n",
-		entry->vmid, entry->hwaddr, &entry->key.iaddr);
+	sparx5_rr_neigh_debug(sparx5, entry, "destroy");
 
 	kfree(entry);
 }
@@ -727,8 +1158,8 @@ static void sparx5_rr_neigh_entry_put(struct sparx5 *sparx5,
 		sparx5_rr_neigh_entry_destroy(sparx5, neigh_entry);
 }
 
-static void sparx5_rr_nexthop4_deinit(struct sparx5 *sparx5,
-				      struct sparx5_rr_nexthop *nh)
+static void sparx5_rr_nexthop_deinit(struct sparx5 *sparx5,
+				     struct sparx5_rr_nexthop *nh)
 {
 	struct sparx5_rr_neigh_entry *neigh_entry = nh->neigh_entry;
 
@@ -740,52 +1171,70 @@ static void sparx5_rr_nexthop4_deinit(struct sparx5 *sparx5,
 	nh->neigh_entry = NULL;
 }
 
-static int sparx5_rr_nexthop4_init(struct sparx5 *sparx5,
-				   struct sparx5_rr_nexthop_group *nh_grp,
-				   struct sparx5_rr_nexthop *nh,
-				   struct fib_nh *fib_nh)
+static int sparx5_rr_nexthop_init(struct sparx5 *sparx5,
+				  struct sparx5_rr_nexthop_group *nh_grp,
+				  struct sparx5_rr_nexthop *nh,
+				  struct fib_nh_common *fnhc)
 {
-	struct net_device *dev = fib_nh->fib_nh_dev;
+	struct net_device *dev = fnhc->nhc_dev;
 	struct sparx5_rr_router_leg *leg;
-
-	leg = sparx5_rr_leg_find_by_dev(sparx5, dev);
-	if (!leg)
-		return -EINVAL;
 
 	nh->ifindex = dev->ifindex;
 	nh->grp = nh_grp;
-	nh->gateway = fib_nh->nh_common.nhc_gw_family != 0;
+	nh->gateway = fnhc->nhc_gw_family != 0;
 	nh->trapped = false;
 	nh->neigh_entry = NULL;
+	nh->neigh_tbl = NULL;
 
 	memset(&nh->gw_addr, 0, sizeof(nh->gw_addr));
 
 	if (!nh->gateway)
 		return 0;
 
-	switch (fib_nh->nh_common.nhc_gw_family) {
+	switch (fnhc->nhc_gw_family) {
 	case AF_INET:
 		nh->gw_addr.version = SPARX5_IPV4;
-		nh->gw_addr.ipv4 = fib_nh->nh_common.nhc_gw.ipv4;
+		nh->gw_addr.ipv4 = fnhc->nhc_gw.ipv4;
+		nh->neigh_tbl = &arp_tbl;
 		break;
 	case AF_INET6:
 		nh->gw_addr.version = SPARX5_IPV6;
-		nh->gw_addr.ipv6 = fib_nh->nh_common.nhc_gw.ipv6;
+		nh->gw_addr.ipv6 = fnhc->nhc_gw.ipv6;
+#if IS_ENABLED(CONFIG_IPV6)
+		nh->neigh_tbl = &nd_tbl;
 		break;
+#else
+		return -EINVAL;
+#endif
 	default:
+		WARN_ON_ONCE(1); /* BUG */
 		return 0;
 	}
+
+	/* When a router leg is removed, all the nexthops with gateway IPs in a
+	 * subnet governed by the leg will receive fib delete events. However,
+	 * these delete events are received one by one. Therefore, this nexthop
+	 * init could have been triggered by a group resize action for such an
+	 * event, where the underlying leg is already removed.
+	 *
+	 * This is not an error. We handle this during offloading by
+	 * trapping nexthops which do not have a neigh_entry. As fib deletion
+	 * events are processed, we converge to the proper state.
+	 */
+	leg = sparx5_rr_leg_find_by_dev(sparx5, dev);
+	if (!leg)
+		return 0;
 
 	return sparx5_rr_nexthop_neigh_init(sparx5, leg, nh);
 }
 
 static int
-sparx5_rr_nexthop4_group_info_init(struct sparx5 *sparx5,
-				   struct sparx5_rr_nexthop_group *nh_grp,
-				   struct fib_info *fi)
+sparx5_rr_nexthop_group_info_init(struct sparx5 *sparx5,
+				  struct sparx5_rr_nexthop_group *nh_grp,
+				  struct sparx5_rr_fib_info *fi)
 {
+	unsigned int nhs = sparx5_rr_fib_info_nhs(fi);
 	struct sparx5_rr_nexthop_group_info *nhgi;
-	unsigned int nhs = fib_info_num_path(fi);
 	struct sparx5_rr_nexthop *nh;
 	int err, i;
 
@@ -800,11 +1249,11 @@ sparx5_rr_nexthop4_group_info_init(struct sparx5 *sparx5,
 	nhgi->count = nhs;
 
 	for (i = 0; i < nhgi->count; i++) {
-		struct fib_nh *fib_nh;
+		struct fib_nh_common *fnhc;
 
 		nh = &nhgi->nexthops[i];
-		fib_nh = fib_info_nh(fi, i);
-		err = sparx5_rr_nexthop4_init(sparx5, nh_grp, nh, fib_nh);
+		fnhc = sparx5_rr_fib_info_nhc(fi, i);
+		err = sparx5_rr_nexthop_init(sparx5, nh_grp, nh, fnhc);
 		if (err)
 			goto err_nexthop_init;
 	}
@@ -814,15 +1263,15 @@ sparx5_rr_nexthop4_group_info_init(struct sparx5 *sparx5,
 err_nexthop_init:
 	for (i--; i >= 0; i--) {
 		nh = &nhgi->nexthops[i];
-		sparx5_rr_nexthop4_deinit(sparx5, nh);
+		sparx5_rr_nexthop_deinit(sparx5, nh);
 	}
 	kfree(nhgi);
 	return err;
 }
 
 static void
-sparx5_rr_nexthop4_group_info_deinit(struct sparx5 *sparx5,
-				     struct sparx5_rr_nexthop_group *nh_grp)
+sparx5_rr_nexthop_group_info_deinit(struct sparx5 *sparx5,
+				    struct sparx5_rr_nexthop_group *nh_grp)
 {
 	struct sparx5_rr_nexthop_group_info *nhgi = nh_grp->nhgi;
 	struct sparx5_rr_nexthop *nh;
@@ -834,7 +1283,7 @@ sparx5_rr_nexthop4_group_info_deinit(struct sparx5 *sparx5,
 	for (i = nhgi->count - 1; i >= 0; i--) {
 		nh = &nhgi->nexthops[i];
 
-		sparx5_rr_nexthop4_deinit(sparx5, nh);
+		sparx5_rr_nexthop_deinit(sparx5, nh);
 	}
 
 	kfree(nhgi);
@@ -879,16 +1328,17 @@ sparx5_rr_nh_grp_arp_tbl_grp_clear(struct sparx5 *sparx5,
 	nh_grp->nhgi->atbl_offset_valid = false;
 }
 
-static void sparx5_rr_nexthop4_group_put(struct sparx5 *sparx5,
-					 struct sparx5_rr_nexthop_group *nh_grp)
+static void sparx5_rr_nexthop_group_put(struct sparx5 *sparx5,
+					struct sparx5_rr_nexthop_group *nh_grp)
 {
 	sparx5_rr_nh_grp_arp_tbl_grp_clear(sparx5, nh_grp);
-	sparx5_rr_nexthop4_group_info_deinit(sparx5, nh_grp);
+	sparx5_rr_nexthop_group_info_deinit(sparx5, nh_grp);
 	kfree(nh_grp);
 }
 
 static struct sparx5_rr_nexthop_group *
-sparx5_rr_nexthop4_group_create(struct sparx5 *sparx5, struct fib_info *fi)
+sparx5_rr_nexthop_group_create(struct sparx5 *sparx5,
+			       struct sparx5_rr_fib_entry *fib_entry)
 {
 	struct sparx5_rr_nexthop_group *nh_grp;
 	int err;
@@ -897,7 +1347,7 @@ sparx5_rr_nexthop4_group_create(struct sparx5 *sparx5, struct fib_info *fi)
 	if (!nh_grp)
 		return ERR_PTR(-ENOMEM);
 
-	err = sparx5_rr_nexthop4_group_info_init(sparx5, nh_grp, fi);
+	err = sparx5_rr_nexthop_group_info_init(sparx5, nh_grp, &fib_entry->fi);
 	if (err)
 		goto err_group_info_init;
 
@@ -927,25 +1377,77 @@ static enum sparx5_rr_fib_type sparx5_rr_rtm_type2fib_type(u8 type)
 }
 
 static void
-sparx5_rr_fib_entry_fen_info_replace(struct sparx5_rr_fib_entry *fib_entry,
-				     struct fib_entry_notifier_info *fen_info)
+sparx5_rr_fib_entry_fib4_info_set(struct sparx5_rr_fib_entry *fib_entry,
+				  struct fib_entry_notifier_info *fen4_info)
 {
-	if (fib_entry->fen4_info.fi)
-		/* Release and allow any previous fib_info to be deleted */
-		fib_info_put(fib_entry->fen4_info.fi);
-
 	/* Prevent the fib_info from being deleted while we store the fen_info */
-	fib_info_hold(fen_info->fi);
-	memcpy(&fib_entry->fen4_info, fen_info, sizeof(*fen_info));
+	fib_info_hold(fen4_info->fi);
+	memcpy(&fib_entry->fi.fen4_info, fen4_info, sizeof(*fen4_info));
+}
+
+static int
+sparx5_rr_fib_entry_fib6_info_add(struct sparx5_rr_fib_entry *fib_entry,
+				  struct sparx5_rr_fib6_entry_info *fib6_info)
+{
+	struct sparx5_rr_fib6_entry_info *f6i = &fib_entry->fi.fe6_info;
+	unsigned int old_ntr6 = f6i->nrt6;
+	unsigned int new_ntr6 = old_ntr6 + fib6_info->nrt6;
+	struct fib6_info **rt_arr;
+
+	rt_arr = kcalloc(new_ntr6, sizeof(struct fib6_info *), GFP_KERNEL);
+	if (!rt_arr)
+		return -ENOMEM;
+
+	/* Copy existing */
+	for (int i = 0; i < old_ntr6; i++)
+		rt_arr[i] = f6i->rt_arr[i];
+
+	/* Copy new and hold fib6_info */
+	for (int i = 0; i < fib6_info->nrt6; i++) {
+		struct fib6_info *rt = fib6_info->rt_arr[i];
+
+		rt_arr[old_ntr6 + i] = rt;
+		fib6_info_hold(rt);
+	}
+
+	/* Free old fib6_info */
+	kfree(f6i->rt_arr);
+	f6i->rt_arr = rt_arr;
+	f6i->nrt6 = new_ntr6;
+
+	WARN_ON(!fib_entry->fi.fe6_info.rt_arr);
+	WARN_ON(!fib_entry->fi.fe6_info.nrt6);
+
+	return 0;
+}
+
+static int
+sparx5_rr_fib_entry_fib_info_add(struct sparx5_rr_fib_entry *fib_entry,
+				 struct sparx5_rr_fib_info *fi)
+{
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		/* IPv4 nexthops can not be added/removed piecemeal similar to
+		 * IPv6, so this is a replace in practice.
+		 */
+		sparx5_rr_fib_entry_fib4_info_set(fib_entry, &fi->fen4_info);
+		return 0;
+	case SPARX5_IPV6:
+		return sparx5_rr_fib_entry_fib6_info_add(fib_entry,
+							 &fi->fe6_info);
+	default:
+		WARN_ON(1);
+		return 0;
+	}
 }
 
 static struct sparx5_rr_fib_entry *
 sparx5_rr_fib_entry_create(struct sparx5 *sparx5, struct sparx5_rr_fib_key *key,
-			   struct fib_entry_notifier_info *fen_info)
+			   struct sparx5_rr_fib_info *fi)
 {
 	struct sparx5_rr_nexthop_group *nh_grp;
+	u8 type = sparx5_rr_fib_info_type(fi);
 	struct sparx5_rr_fib_entry *fib_entry;
-	struct fib_nh_common *nhc;
 	int err;
 
 	fib_entry = kzalloc(sizeof(*fib_entry), GFP_KERNEL);
@@ -953,111 +1455,173 @@ sparx5_rr_fib_entry_create(struct sparx5 *sparx5, struct sparx5_rr_fib_key *key,
 		return ERR_PTR(-ENOMEM);
 
 	memcpy(&fib_entry->key, key, sizeof(*key));
-	fib_entry->fen4_info.fi = NULL;
-	sparx5_rr_fib_entry_fen_info_replace(fib_entry, fen_info);
-	fib_entry->type = sparx5_rr_rtm_type2fib_type(fen_info->type);
+	sparx5_rr_fib_info_init(&fib_entry->fi, fi->version);
+	fib_entry->type = sparx5_rr_rtm_type2fib_type(type);
 	fib_entry->sort_key = sparx5_rr_route_sort_key(key->prefix_len);
+	fib_entry->hw_route.vrule_id = 0;
+	fib_entry->hw_route.vrule_id_valid = false;
+
+	err = sparx5_rr_fib_entry_fib_info_add(fib_entry, fi);
+	if (err)
+		goto err_fib_info_set;
 
 	err = sparx5_rr_fib_entry_insert(sparx5, fib_entry);
 	if (err)
 		goto err_fib_entry_insert;
 
-	/* Need a lower port ref for VCAP API. TODO: Accommodate fib types
-	 * without meaningful lower ports, such as blackholes.
-	 */
-	if (fen_info->fi->fib_nhs > 0) {
-		nhc = fib_info_nhc(fen_info->fi, 0);
-		rcu_read_lock();
-		fib_entry->lower_port =
-			sparx5_port_dev_lower_find_rcu(nhc->nhc_dev);
-		rcu_read_unlock();
-	}
-
-	nh_grp = sparx5_rr_nexthop4_group_create(sparx5, fen_info->fi);
+	nh_grp = sparx5_rr_nexthop_group_create(sparx5, fib_entry);
 	if (IS_ERR(nh_grp)) {
 		err = PTR_ERR(nh_grp);
-		goto err_nexthop4_group_create;
+		goto err_nexthop_group_create;
 	}
 
 	fib_entry->nh_grp = nh_grp;
 	nh_grp->fib_entry = fib_entry;
 	INIT_LIST_HEAD(&fib_entry->neigh_list);
 
-	sparx5_rr_fib_lpm4_insert(sparx5, fib_entry);
+	sparx5_rr_fib_lpm_insert(sparx5, fib_entry);
+
+	sparx5_rr_fib_debug(sparx5, fib_entry, "create");
 
 	return fib_entry;
 
-err_nexthop4_group_create:
+err_nexthop_group_create:
 	sparx5_rr_fib_entry_remove(sparx5, fib_entry);
 err_fib_entry_insert:
-	fib_info_put(fen_info->fi);
+	sparx5_rr_fib_info_put(&fib_entry->fi);
+err_fib_info_set:
 	kfree(fib_entry);
 
 	return ERR_PTR(err);
 }
 
+#if IS_ENABLED(CONFIG_IPV6)
+static void
+sparx5_rr_fib6_entry_offload_mark(struct sparx5 *sparx5,
+				  struct sparx5_rr_fib6_entry_info *fen6_info,
+				  bool offload,
+				  bool trap,
+				  bool offload_failed)
+{
+	for (int i = 0; i < fen6_info->nrt6; i++)
+		fib6_info_hw_flags_set(&init_net, fen6_info->rt_arr[i], offload,
+				       trap, offload_failed);
+}
+#else
+static void
+sparx5_rr_fib6_entry_offload_mark(struct sparx5 *sparx5,
+				  struct sparx5_rr_fib6_entry_info *fen6_info,
+				  bool offload,
+				  bool trap,
+				  bool offload_failed)
+{
+}
+#endif
+
 static void
 sparx5_rr_fib4_entry_offload_mark(struct sparx5 *sparx5,
-				  struct sparx5_rr_fib_entry *fib_entry)
+				  struct fib_entry_notifier_info *fen4_info,
+				  bool offload,
+				  bool trap,
+				  bool offload_failed)
 {
-	int dst_len = fib_entry->key.prefix_len;
 	struct fib_rt_info fri;
 
-	fri.fi = fib_entry->fen4_info.fi;
-	fri.tb_id = fib_entry->key.tb_id;
-	fri.dst = fib_entry->key.addr.ipv4;
-	fri.dst_len = dst_len;
-	fri.dscp = fib_entry->fen4_info.dscp;
-	fri.type = fib_entry->fen4_info.type;
-	fri.offload_failed = fib_entry->offload_fail;
-
-	if (fib_entry->offload_fail) {
-		fri.offload = false;
-		fri.trap = false;
-	} else {
-		fri.offload = true;
-		fri.trap = fib_entry->trap;
-	}
+	fri.fi = fen4_info->fi;
+	fri.tb_id = fen4_info->tb_id;
+	fri.dst = cpu_to_be32(fen4_info->dst);
+	fri.dst_len = fen4_info->dst_len;
+	fri.dscp = fen4_info->dscp;
+	fri.type = fen4_info->type;
+	fri.offload = offload;
+	fri.trap = trap;
+	fri.offload_failed = offload_failed;
 
 	fib_alias_hw_flags_set(&init_net, &fri);
 }
 
-static int sparx5_rr_lpm4_arp_entry_create(struct sparx5 *sparx5,
-					   struct net_device *port_dev,
-					   __be32 addr, u32 prefix_len,
-					   unsigned char mac[ETH_ALEN],
-					   u16 evmid,
-					   struct sparx5_rr_hw_route *hw_route)
+static void sparx5_rr_fib_info_offload_mark(struct sparx5 *sparx5,
+					    struct sparx5_rr_fib_info *fi,
+					    bool offload, bool trap,
+					    bool offload_failed)
+{
+	switch (fi->version) {
+	case SPARX5_IPV4:
+		return sparx5_rr_fib4_entry_offload_mark(sparx5,
+							 &fi->fen4_info,
+							 offload, trap,
+							 offload_failed);
+	case SPARX5_IPV6:
+		return sparx5_rr_fib6_entry_offload_mark(sparx5,
+							 &fi->fe6_info,
+							 offload, trap,
+							 offload_failed);
+	}
+}
+
+static void
+sparx5_rr_fib_entry_offload_mark(struct sparx5 *sparx5,
+				 struct sparx5_rr_fib_entry *fib_entry)
+{
+	bool offload, trap, offload_failed;
+
+	offload_failed = fib_entry->offload_fail;
+	offload = !fib_entry->offload_fail;
+	trap = !fib_entry->offload_fail && fib_entry->trap;
+
+	sparx5_rr_fib_info_offload_mark(sparx5, &fib_entry->fi, offload, trap,
+					offload_failed);
+}
+
+static int
+sparx5_rr_lpm_arp_entry_create(struct sparx5 *sparx5,
+			       struct sparx5_iaddr *addr,
+			       u32 prefix_len, unsigned char mac[ETH_ALEN],
+			       u16 evmid, struct sparx5_rr_hw_route *hw_route)
 {
 	u32 priority = sparx5_rr_route_sort_key(prefix_len);
+	struct net_device *pdev = sparx5->router->port_dev;
 	struct vcap_control *vctrl = sparx5->vcap_ctrl;
-	u32 mask = ntohl(inet_make_mask(prefix_len));
-	u32 iaddr = ntohl(addr);
 	struct vcap_rule *rule;
 	u32 mac_msb, mac_lsb;
 	int err;
 
 	sparx5_rr_split_mac(mac, 32, &mac_msb, &mac_lsb);
 
-	rule = vcap_alloc_rule(vctrl, port_dev, VCAP_CID_PREROUTING_L0,
+	rule = vcap_alloc_rule(vctrl, pdev, VCAP_CID_PREROUTING_L0,
 			       VCAP_USER_L3, priority, 0);
 	if (!rule)
 		return -ENOMEM;
 
-	err = vcap_rule_add_key_u32(rule, VCAP_KF_IP4_XIP, iaddr, mask);
-	err |= vcap_rule_add_key_u32(rule, VCAP_KF_AFFIX, 0, 0);
-	err |= vcap_rule_add_key_bit(rule, VCAP_KF_DST_FLAG, VCAP_BIT_1);
+	err = sparx5_rr_lpm_rule_xip_add(rule, addr, prefix_len);
+	if (err)
+		goto free_rule;
+
+	err = vcap_rule_add_key_u32(rule, VCAP_KF_AFFIX, 0, 0);
+	if (err)
+		goto free_rule;
+
+	err = vcap_rule_add_key_bit(rule, VCAP_KF_DST_FLAG, VCAP_BIT_1);
 	if (err)
 		goto free_rule;
 
 	err = vcap_rule_add_action_u32(rule, VCAP_AF_MAC_MSB, mac_msb);
-	err |= vcap_rule_add_action_u32(rule, VCAP_AF_MAC_LSB, mac_lsb);
-	err |= vcap_rule_add_action_u32(rule, VCAP_AF_ARP_VMID, evmid);
-	err |= vcap_rule_add_action_bit(rule, VCAP_AF_ARP_ENA, VCAP_BIT_1);
 	if (err)
 		goto free_rule;
 
-	err = vcap_val_rule(rule, ETH_P_IP);
+	err = vcap_rule_add_action_u32(rule, VCAP_AF_MAC_LSB, mac_lsb);
+	if (err)
+		goto free_rule;
+
+	err = vcap_rule_add_action_u32(rule, VCAP_AF_ARP_VMID, evmid);
+	if (err)
+		goto free_rule;
+
+	err = vcap_rule_add_action_bit(rule, VCAP_AF_ARP_ENA, VCAP_BIT_1);
+	if (err)
+		goto free_rule;
+
+	err = vcap_val_rule(rule, sparx5_rr_iaddr_proto(addr));
 	if (err)
 		goto free_rule;
 
@@ -1071,9 +1635,9 @@ free_rule:
 	return err;
 }
 
-static int sparx5_rr_lpm4_arp_entry_mod(struct sparx5 *sparx5,
-					unsigned char mac[ETH_ALEN], u16 evmid,
-					u32 vrule_id)
+static int sparx5_rr_lpm_arp_entry_mod(struct sparx5 *sparx5,
+				       unsigned char mac[ETH_ALEN], u16 evmid,
+				       u32 vrule_id)
 {
 	struct vcap_control *vctrl = sparx5->vcap_ctrl;
 	struct vcap_rule *vrule;
@@ -1087,9 +1651,18 @@ static int sparx5_rr_lpm4_arp_entry_mod(struct sparx5 *sparx5,
 		return -EINVAL;
 
 	err = vcap_rule_mod_action_u32(vrule, VCAP_AF_MAC_MSB, mac_msb);
-	err |= vcap_rule_mod_action_u32(vrule, VCAP_AF_MAC_LSB, mac_lsb);
-	err |= vcap_rule_mod_action_u32(vrule, VCAP_AF_ARP_VMID, evmid);
-	err |= vcap_rule_mod_action_bit(vrule, VCAP_AF_ARP_ENA, VCAP_BIT_1);
+	if (err)
+		goto free_rule;
+
+	err = vcap_rule_mod_action_u32(vrule, VCAP_AF_MAC_LSB, mac_lsb);
+	if (err)
+		goto free_rule;
+
+	err = vcap_rule_mod_action_u32(vrule, VCAP_AF_ARP_VMID, evmid);
+	if (err)
+		goto free_rule;
+
+	err = vcap_rule_mod_action_bit(vrule, VCAP_AF_ARP_ENA, VCAP_BIT_1);
 	if (err)
 		goto free_rule;
 
@@ -1106,6 +1679,7 @@ sparx5_rr_fib_entry_update_arp_entry(struct sparx5 *sparx5,
 				     struct sparx5_rr_fib_entry *fib_entry,
 				     unsigned char mac[ETH_ALEN], u16 evmid)
 {
+	struct net_device *pdev = sparx5->router->port_dev;
 	struct vcap_control *vctrl = sparx5->vcap_ctrl;
 	u32 vrule_id = fib_entry->hw_route.vrule_id;
 	struct vcap_rule *vrule;
@@ -1115,14 +1689,18 @@ sparx5_rr_fib_entry_update_arp_entry(struct sparx5 *sparx5,
 	sparx5_rr_split_mac(mac, 32, &mac_msb, &mac_lsb);
 
 	vrule = vcap_get_rule(vctrl, vrule_id);
-	if (IS_ERR(vrule))
-		return -EINVAL;
+	if (IS_ERR(vrule)) {
+		fib_entry->hw_route.vrule_id_valid = false;
+		return PTR_ERR(vrule);
+	}
 
 	switch (vrule->actionset) {
 	case VCAP_AFS_ARP_ENTRY:
 		err = vcap_rule_mod_action_u32(vrule, VCAP_AF_MAC_MSB, mac_msb);
-		err |= vcap_rule_mod_action_u32(vrule, VCAP_AF_MAC_LSB,
-						mac_lsb);
+		if (err)
+			goto free_rule;
+
+		err = vcap_rule_mod_action_u32(vrule, VCAP_AF_MAC_LSB, mac_lsb);
 		if (err)
 			goto free_rule;
 
@@ -1130,18 +1708,16 @@ sparx5_rr_fib_entry_update_arp_entry(struct sparx5 *sparx5,
 		goto free_rule;
 	case VCAP_AFS_ARP_PTR:
 		/* Convert arp_ptr to arp_entry */
-		err = sparx5_rr_lpm4_arp_entry_create(sparx5,
-						      fib_entry->lower_port->ndev,
-						      fib_entry->key.addr.ipv4,
-						      fib_entry->key.prefix_len,
-						      mac, evmid,
-						      &fib_entry->hw_route);
+		err = sparx5_rr_lpm_arp_entry_create(sparx5,
+						     &fib_entry->key.addr,
+						     fib_entry->key.prefix_len,
+						     mac, evmid,
+						     &fib_entry->hw_route);
 		if (err)
 			goto free_rule;
 
 		sparx5_rr_nh_grp_arp_tbl_grp_clear(sparx5, fib_entry->nh_grp);
-		err = vcap_del_rule(vctrl, fib_entry->lower_port->ndev,
-				    vrule_id);
+		err = vcap_del_rule(vctrl, pdev, vrule_id);
 		goto free_rule;
 	default:
 		err = -EINVAL;
@@ -1154,39 +1730,53 @@ free_rule:
 	return err;
 }
 
-static int sparx5_rr_lpm4_arp_ptr_create(struct sparx5 *sparx5,
-					 struct net_device *port_dev,
-					 __be32 addr, u32 prefix_len,
-					 u32 arp_offset_addr, u8 ecmp_size,
-					 struct sparx5_rr_hw_route *hw_route)
+static int sparx5_rr_lpm_arp_ptr_create(struct sparx5 *sparx5,
+					struct sparx5_iaddr *addr,
+					u32 prefix_len, u32 arp_offset_addr,
+					u8 ecmp_size,
+					struct sparx5_rr_hw_route *hw_route)
 {
 	u32 priority = sparx5_rr_route_sort_key(prefix_len);
+	struct net_device *pdev = sparx5->router->port_dev;
 	struct vcap_control *vctrl = sparx5->vcap_ctrl;
-	u32 mask = ntohl(inet_make_mask(prefix_len));
-	u32 iaddr = ntohl(addr);
 	struct vcap_rule *rule;
 	int err;
 
-	rule = vcap_alloc_rule(vctrl, port_dev, VCAP_CID_PREROUTING_L0,
+	rule = vcap_alloc_rule(vctrl, pdev, VCAP_CID_PREROUTING_L0,
 			       VCAP_USER_L3, priority, 0);
 	if (!rule)
 		return PTR_ERR(rule);
 
-	err = vcap_rule_add_key_u32(rule, VCAP_KF_IP4_XIP, iaddr, mask);
-	err |= vcap_rule_add_key_u32(rule, VCAP_KF_AFFIX, 0, 0);
-	err |= vcap_rule_add_key_bit(rule, VCAP_KF_DST_FLAG, VCAP_BIT_1);
+	err = sparx5_rr_lpm_rule_xip_add(rule, addr, prefix_len);
+	if (err)
+		goto out;
+
+	err = vcap_rule_add_key_u32(rule, VCAP_KF_AFFIX, 0, 0);
+	if (err)
+		goto out;
+
+	err = vcap_rule_add_key_bit(rule, VCAP_KF_DST_FLAG, VCAP_BIT_1);
 	if (err)
 		goto out;
 
 	err = vcap_rule_add_action_u32(rule, VCAP_AF_ARP_PTR, arp_offset_addr);
-	err |= vcap_rule_add_action_bit(rule, VCAP_AF_ARP_PTR_REMAP_ENA,
-					VCAP_BIT_0);
-	err |= vcap_rule_add_action_u32(rule, VCAP_AF_ECMP_CNT, ecmp_size - 1);
-	err |= vcap_rule_add_action_u32(rule, VCAP_AF_RGID, 0);
 	if (err)
 		goto out;
 
-	err = vcap_val_rule(rule, ETH_P_IP);
+	err = vcap_rule_add_action_bit(rule, VCAP_AF_ARP_PTR_REMAP_ENA,
+				       VCAP_BIT_0);
+	if (err)
+		goto out;
+
+	err = vcap_rule_add_action_u32(rule, VCAP_AF_ECMP_CNT, ecmp_size - 1);
+	if (err)
+		goto out;
+
+	err = vcap_rule_add_action_u32(rule, VCAP_AF_RGID, 0);
+	if (err)
+		goto out;
+
+	err = vcap_val_rule(rule, sparx5_rr_iaddr_proto(addr));
 	if (err)
 		goto out;
 
@@ -1196,7 +1786,6 @@ static int sparx5_rr_lpm4_arp_ptr_create(struct sparx5 *sparx5,
 
 out:
 	vcap_free_rule(rule);
-
 	return err;
 }
 
@@ -1205,7 +1794,7 @@ sparx5_rr_fib_entry_ecmp_hw_apply(struct sparx5 *sparx5,
 				  struct sparx5_rr_fib_entry *fib_entry)
 {
 	struct sparx5_rr_nexthop_group_info *nhgi = fib_entry->nh_grp->nhgi;
-	struct net_device *lower_port = fib_entry->lower_port->ndev;
+	unsigned char zero_mac[ETH_ALEN] __aligned(2);
 	struct sparx5_rr_neigh_entry *nh_neigh;
 	struct sparx5_rr_nexthop *nh;
 	int err, i, offset;
@@ -1217,18 +1806,27 @@ sparx5_rr_fib_entry_ecmp_hw_apply(struct sparx5 *sparx5,
 		return offset;
 	}
 
+	/* Trap frames with zero mac */
+	eth_zero_addr(zero_mac);
+
 	for (i = 0; i < nhgi->count; i++) {
 		nh = &nhgi->nexthops[i];
 		nh_neigh = nh->neigh_entry;
-		nh->trapped = is_zero_ether_addr(nh_neigh->hwaddr);
-
-		sparx5_rr_arp_tbl_hw_addr_apply(sparx5, nh_neigh->hwaddr,
-						nh_neigh->vmid, offset + i);
+		nh->trapped = !nh_neigh || is_zero_ether_addr(nh_neigh->hwaddr);
+		if (nh_neigh)
+			sparx5_rr_arp_tbl_hw_addr_apply(sparx5,
+							nh_neigh->hwaddr,
+							nh_neigh->vmid,
+							offset + i);
+		else
+			sparx5_rr_arp_tbl_hw_addr_apply(sparx5, zero_mac, 0,
+							offset + i);
 	}
-	err = sparx5_rr_lpm4_arp_ptr_create(sparx5, lower_port,
-					    fib_entry->key.addr.ipv4,
-					    fib_entry->key.prefix_len, offset,
-					    nhgi->count, &fib_entry->hw_route);
+
+	err = sparx5_rr_lpm_arp_ptr_create(sparx5,
+					   &fib_entry->key.addr,
+					   fib_entry->key.prefix_len, offset,
+					   nhgi->count, &fib_entry->hw_route);
 	if (err)
 		goto err_arp_ptr_create;
 
@@ -1252,7 +1850,6 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 					struct sparx5_rr_fib_entry *fib_entry)
 {
 	struct sparx5_rr_nexthop_group_info *nhgi = fib_entry->nh_grp->nhgi;
-	struct net_device *lower_port = fib_entry->lower_port->ndev;
 	unsigned char zero_mac[ETH_ALEN] __aligned(2);
 	struct sparx5_rr_neigh_entry *nh_neigh;
 	struct sparx5_rr_nexthop *nh;
@@ -1260,6 +1857,8 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 
 	/* Trap frames with zero mac */
 	eth_zero_addr(zero_mac);
+
+	sparx5_rr_fib_debug(sparx5, fib_entry, "apply");
 
 	switch (fib_entry->type) {
 	case SPARX5_RR_FIB_TYPE_LOCAL:
@@ -1273,22 +1872,21 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 		}
 
 		fib_entry->trap = true;
-		err = sparx5_rr_lpm4_arp_entry_create(sparx5,
-						      lower_port,
-						      fib_entry->key.addr.ipv4,
-						      fib_entry->key.prefix_len,
-						      zero_mac, 0,
-						      &fib_entry->hw_route);
+		/* write zero mac ARP ENTRY */
+		err = sparx5_rr_lpm_arp_entry_create(sparx5,
+						     &fib_entry->key.addr,
+						     fib_entry->key.prefix_len,
+						     zero_mac, 0,
+						     &fib_entry->hw_route);
 		goto out;
 	case SPARX5_RR_FIB_TYPE_UNICAST:
 		if (!nhgi->nexthops->gateway) {
 			/* Directly connected subnet. Trap traffic for subnet. */
-			err = sparx5_rr_lpm4_arp_entry_create(sparx5,
-							      lower_port,
-							      fib_entry->key.addr.ipv4,
-							      fib_entry->key.prefix_len,
-							      zero_mac, 0,
-							      &fib_entry->hw_route);
+			err = sparx5_rr_lpm_arp_entry_create(sparx5,
+							     &fib_entry->key.addr,
+							     fib_entry->key.prefix_len,
+							     zero_mac, 0,
+							     &fib_entry->hw_route);
 			goto out;
 		} else if (nhgi->count == 1) { /* Use arp_entry */
 			nh = &nhgi->nexthops[0];
@@ -1296,15 +1894,15 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 
 			nh->trapped = is_zero_ether_addr(nh_neigh->hwaddr);
 
-			err = sparx5_rr_lpm4_arp_entry_create(sparx5,
-							      lower_port,
-							      fib_entry->key.addr.ipv4,
-							      fib_entry->key.prefix_len,
-							      nh_neigh->hwaddr,
-							      nh_neigh->vmid,
-							      &fib_entry->hw_route);
+			err = sparx5_rr_lpm_arp_entry_create(sparx5,
+							     &fib_entry->key.addr,
+							     fib_entry->key.prefix_len,
+							     nh_neigh->hwaddr,
+							     nh_neigh->vmid,
+							     &fib_entry->hw_route);
 			goto out;
 		} else {
+			/* Multiple nexthops so we use the HW arp table. */
 			err = sparx5_rr_fib_entry_ecmp_hw_apply(sparx5,
 								fib_entry);
 			goto out;
@@ -1312,14 +1910,13 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 
 		break;
 	default:
-		dev_err(sparx5->dev, "Fib entry offload, unhandled type=%d\n",
-			fib_entry->type);
+		dev_warn(sparx5->dev, "Fib entry offload, unhandled type=%d\n",
+			 fib_entry->type);
 		return -EINVAL;
 	}
 
 out:
 	fib_entry->offload_fail = !!err;
-	sparx5_rr_fib4_entry_offload_mark(sparx5, fib_entry);
 
 	return err;
 }
@@ -1329,7 +1926,8 @@ static void sparx5_rr_nexthop_neigh_update(struct sparx5 *sparx5,
 					   bool entry_connected)
 {
 	unsigned char mac[ETH_ALEN] __aligned(2);
-	int err;
+	u16 vmid = nh->neigh_entry->vmid;
+	int err, nh_offset, grp_idx;
 
 	if (!nh->gateway)
 		return;
@@ -1348,8 +1946,7 @@ static void sparx5_rr_nexthop_neigh_update(struct sparx5 *sparx5,
 	if (nh->grp->nhgi->count == 1) {
 		err = sparx5_rr_fib_entry_update_arp_entry(sparx5,
 							   nh->grp->fib_entry,
-							   mac,
-							   nh->neigh_entry->vmid);
+							   mac, vmid);
 		if (err)
 			dev_err(sparx5->dev,
 				"Nexthop fib entry update failed\n");
@@ -1357,12 +1954,10 @@ static void sparx5_rr_nexthop_neigh_update(struct sparx5 *sparx5,
 		return;
 	}
 
-	int nh_offset = (int)(ptrdiff_t)(nh - nh->grp->nhgi->nexthops);
-	int grp_idx = nh->grp->nhgi->atbl_offset;
+	nh_offset = (int)(ptrdiff_t)(nh - nh->grp->nhgi->nexthops);
+	grp_idx = nh->grp->nhgi->atbl_offset;
 
-	sparx5_rr_arp_tbl_hw_addr_apply(sparx5, mac,
-					nh->neigh_entry->vmid,
-					grp_idx + nh_offset);
+	sparx5_rr_arp_tbl_hw_addr_apply(sparx5, mac, vmid, grp_idx + nh_offset);
 }
 
 static void
@@ -1372,9 +1967,6 @@ sparx5_rr_nexthops_update_notify(struct sparx5 *sparx5,
 {
 	struct sparx5_rr_nexthop *nh;
 
-	if (list_empty(&neigh_entry->nexthop_list))
-		return;
-
 	list_for_each_entry(nh, &neigh_entry->nexthop_list, neigh_list_node)
 		sparx5_rr_nexthop_neigh_update(sparx5, nh, entry_connected);
 }
@@ -1383,16 +1975,16 @@ static int sparx5_rr_neigh_entry_hw_apply(struct sparx5 *sparx5,
 					  struct sparx5_rr_neigh_entry *entry)
 {
 	u32 prefix_len = SPARX5_IADDR_LEN(entry->key.iaddr.version);
-	struct net_device *port_below = entry->lower_port->ndev;
 
-	if (!entry->hw_route.vrule_id_valid) {
-		return sparx5_rr_lpm4_arp_entry_create(sparx5, port_below,
-						       entry->key.iaddr.ipv4,
-						       prefix_len,
-						       entry->hwaddr, entry->vmid,
-						       &entry->hw_route);
-	}
-	return sparx5_rr_lpm4_arp_entry_mod(sparx5, entry->hwaddr, entry->vmid,
+	if (!entry->hw_route.vrule_id_valid)
+		return sparx5_rr_lpm_arp_entry_create(sparx5,
+						      &entry->key.iaddr,
+						      prefix_len,
+						      entry->hwaddr,
+						      entry->vmid,
+						      &entry->hw_route);
+
+	return sparx5_rr_lpm_arp_entry_mod(sparx5, entry->hwaddr, entry->vmid,
 					    entry->hw_route.vrule_id);
 }
 
@@ -1400,6 +1992,7 @@ static void sparx5_rr_neigh_entry_update(struct sparx5 *sparx5,
 					 struct sparx5_rr_neigh_entry *entry,
 					 bool adding)
 {
+	struct net_device *pdev = sparx5->router->port_dev;
 	bool offloaded = adding;
 	int err;
 
@@ -1408,13 +2001,14 @@ static void sparx5_rr_neigh_entry_update(struct sparx5 *sparx5,
 
 	entry->connected = adding;
 
+	sparx5_rr_neigh_debug(sparx5, entry, "update");
+
 	if (adding) {
 		err = sparx5_rr_neigh_entry_hw_apply(sparx5, entry);
 		if (err)
 			offloaded = false;
 	} else if (entry->hw_route.vrule_id_valid) {
-		vcap_del_rule(sparx5->vcap_ctrl, entry->lower_port->ndev,
-			      entry->hw_route.vrule_id);
+		vcap_del_rule(sparx5->vcap_ctrl, pdev, entry->hw_route.vrule_id);
 		entry->hw_route.vrule_id_valid = false;
 	}
 
@@ -1424,10 +2018,11 @@ static void sparx5_rr_neigh_entry_update(struct sparx5 *sparx5,
 static void sparx5_rr_fib_entry_destroy(struct sparx5 *sparx5,
 					struct sparx5_rr_fib_entry *fib_entry)
 {
+	struct net_device *pdev = sparx5->router->port_dev;
 	struct sparx5_rr_neigh_entry *neigh_entry, *tmp;
 	struct vcap_control *vctrl = sparx5->vcap_ctrl;
 
-	sparx5_rr_fib_lpm4_remove(fib_entry);
+	sparx5_rr_fib_lpm_remove(fib_entry);
 
 	list_for_each_entry_safe(neigh_entry, tmp, &fib_entry->neigh_list,
 				 fib_list_node) {
@@ -1440,12 +2035,60 @@ static void sparx5_rr_fib_entry_destroy(struct sparx5 *sparx5,
 		sparx5_rr_neigh_entry_put(sparx5, neigh_entry);
 	}
 
+	sparx5_rr_fib_debug(sparx5, fib_entry, "destroy");
+
 	sparx5_rr_fib_entry_remove(sparx5, fib_entry);
-	sparx5_rr_nexthop4_group_put(sparx5, fib_entry->nh_grp);
-	vcap_del_rule(vctrl, fib_entry->lower_port->ndev,
-		      fib_entry->hw_route.vrule_id);
-	fib_info_put(fib_entry->fen4_info.fi);
+	sparx5_rr_nexthop_group_put(sparx5, fib_entry->nh_grp);
+	if (fib_entry->hw_route.vrule_id_valid)
+		vcap_del_rule(vctrl, pdev, fib_entry->hw_route.vrule_id);
+	sparx5_rr_fib_info_put(&fib_entry->fi);
 	kfree(fib_entry);
+}
+
+/* Update nexthop group based on current fib_info state. */
+static int
+sparx5_rr_entry_nexthop_group_update(struct sparx5 *sparx5,
+				     struct sparx5_rr_fib_entry *fib_entry)
+{
+	struct net_device *pdev = sparx5->router->port_dev;
+	struct vcap_control *vctrl = sparx5->vcap_ctrl;
+	struct sparx5_rr_nexthop_group *new_nh_grp;
+	struct sparx5_rr_nexthop_group *old_nh_grp;
+	u32 old_vrule_id;
+	int err;
+
+	old_nh_grp = fib_entry->nh_grp;
+	old_vrule_id = fib_entry->hw_route.vrule_id;
+
+	/* Prepare new group in SW representation */
+	new_nh_grp = sparx5_rr_nexthop_group_create(sparx5, fib_entry);
+	if (IS_ERR(new_nh_grp)) {
+		dev_warn(sparx5->dev, "Failed to create nexthop group\n");
+		return PTR_ERR(new_nh_grp);
+	}
+
+	fib_entry->nh_grp = new_nh_grp;
+	new_nh_grp->fib_entry = fib_entry;
+
+	/* Write new rule to HW */
+	err = sparx5_rr_fib_entry_hw_apply(sparx5, fib_entry);
+	if (err)
+		goto hw_apply_err;
+
+	/* Clean up old rule and start routing traffic according to new rule */
+	if (fib_entry->hw_route.vrule_id != old_vrule_id)
+		vcap_del_rule(vctrl, pdev, old_vrule_id);
+
+	/* Remove old unused group */
+	sparx5_rr_nexthop_group_put(sparx5, old_nh_grp);
+
+	return 0;
+
+hw_apply_err:
+	fib_entry->nh_grp = old_nh_grp;
+	new_nh_grp->fib_entry = NULL;
+	sparx5_rr_nexthop_group_put(sparx5, new_nh_grp);
+	return err;
 }
 
 static void sparx5_rr_leg_hw_init(struct sparx5 *sparx5,
@@ -1461,11 +2104,22 @@ static void sparx5_rr_leg_hw_init(struct sparx5 *sparx5,
 		 ANA_L3_VLAN_CFG(leg->vid));
 
 	/* Configure router leg */
+
+#if IS_ENABLED(CONFIG_IPV6)
+	spx5_rmw(ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA_SET(1) |
+		 ANA_L3_RLEG_CTRL_RLEG_EVID_SET(leg->vid) |
+		 ANA_L3_RLEG_CTRL_RLEG_IP6_UC_ENA_SET(1),
+		 ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA |
+		 ANA_L3_RLEG_CTRL_RLEG_EVID |
+		 ANA_L3_RLEG_CTRL_RLEG_IP6_UC_ENA, sparx5,
+		 ANA_L3_RLEG_CTRL(leg->vmid));
+#else
 	spx5_rmw(ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA_SET(1) |
 		 ANA_L3_RLEG_CTRL_RLEG_EVID_SET(leg->vid),
 		 ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA |
 		 ANA_L3_RLEG_CTRL_RLEG_EVID, sparx5,
 		 ANA_L3_RLEG_CTRL(leg->vmid));
+#endif
 
 	/* Configure egress VLAN in rewriter */
 	spx5_rmw(REW_RLEG_CTRL_RLEG_EVID_SET(leg->vid), REW_RLEG_CTRL_RLEG_EVID,
@@ -1480,10 +2134,43 @@ static void sparx5_rr_leg_hw_deinit(struct sparx5 *sparx5,
 		 ANA_L3_VLAN_CFG_VLAN_RLEG_ENA, sparx5,
 		 ANA_L3_VLAN_CFG(leg->vid));
 
-	/* Disable IPv4 UC routing on leg */
-	spx5_rmw(ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA_SET(0),
-		 ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA, sparx5,
+	/* Disable IP UC routing on leg */
+	spx5_rmw(ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA_SET(0) |
+		 ANA_L3_RLEG_CTRL_RLEG_IP6_UC_ENA_SET(0),
+		 ANA_L3_RLEG_CTRL_RLEG_IP4_UC_ENA |
+		 ANA_L3_RLEG_CTRL_RLEG_IP6_UC_ENA, sparx5,
 		 ANA_L3_RLEG_CTRL(leg->vmid));
+}
+
+static int sparx5_rr_lpm_link_local_create(struct sparx5 *sparx5)
+{
+	struct sparx5_iaddr addr __aligned(2) = { 0 };
+	unsigned char zero_mac[ETH_ALEN];
+
+	eth_zero_addr(zero_mac);
+
+	/* Trap traffic to fe80::/64 */
+	addr.version = SPARX5_IPV6;
+	addr.ipv6.in6_u.u6_addr8[0] = 0xfe;
+	addr.ipv6.in6_u.u6_addr8[1] = 0x80;
+
+	return sparx5_rr_lpm_arp_entry_create(sparx5, &addr,
+					      SPARX5_LINK_LOCAL_PREFIX_LEN,
+					      zero_mac, 0,
+					      &sparx5->router->link_local);
+}
+
+static void sparx5_rr_lpm_link_local_destroy(struct sparx5 *sparx5)
+{
+	struct sparx5_rr_hw_route *llocal = &sparx5->router->link_local;
+	struct net_device *pdev = sparx5->router->port_dev;
+	struct vcap_control *vctrl = sparx5->vcap_ctrl;
+
+	if (!llocal->vrule_id_valid)
+		return;
+
+	vcap_del_rule(vctrl, pdev, llocal->vrule_id);
+	llocal->vrule_id_valid = false;
 }
 
  /* Router legs are identified by their VMID in hw */
@@ -1520,15 +2207,17 @@ static void sparx5_rr_router_leg_destroy(struct sparx5_rr_router_leg *leg)
 {
 	struct sparx5 *sparx5 = leg->sparx5;
 
+	dev_dbg(sparx5->dev, "Leg destroy vid=%u vmid=%u dev=%s\n", leg->vid,
+		leg->vmid, leg->dev->name);
+
 	sparx5_rr_leg_hw_deinit(sparx5, leg);
-	atomic_sub(1, &sparx5->router->legs_count);
 	sparx5_vmid_free(leg->sparx5, leg->vmid);
 	list_del(&leg->leg_list_node);
+
+	if (atomic_dec_return(&sparx5->router->legs_count) == 0)
+		sparx5_rr_lpm_link_local_destroy(sparx5);
+
 	netdev_put(leg->dev, NULL);
-
-	dev_dbg(sparx5->dev, "Leg destroy vid=%u vmid=%u\n", leg->vid,
-		leg->vmid);
-
 	kfree(leg);
 }
 
@@ -1547,8 +2236,14 @@ sparx5_rr_router_leg_create(struct sparx5 *sparx5, struct net_device *dev,
 	 */
 	netdev_hold(dev, NULL, GFP_KERNEL);
 
+	/* While a router leg exists, add route to trap link-local traffic. */
+	if (atomic_inc_return(&sparx5->router->legs_count) == 1) {
+		if (sparx5_rr_lpm_link_local_create(sparx5))
+			dev_warn(sparx5->dev,
+				 "Failed to create link-local route\n");
+	}
+
 	list_add(&leg->leg_list_node, &sparx5->router->leg_list);
-	atomic_add(1, &sparx5->router->legs_count);
 	sparx5_rr_leg_hw_init(sparx5, leg);
 
 	dev_dbg(sparx5->dev, "Leg create dev=%s vid=%u vmid=%u\n", dev->name,
@@ -1558,12 +2253,12 @@ sparx5_rr_router_leg_create(struct sparx5 *sparx5, struct net_device *dev,
 }
 
 static void sparx5_rr_fib4_del(struct sparx5 *sparx5,
-			       struct fib_entry_notifier_info *fen_info)
+			       struct sparx5_rr_fib_info *fi)
 {
 	struct sparx5_rr_fib_entry *fib_entry;
 	struct sparx5_rr_fib_key key;
 
-	sparx5_rr_finfo_to_fib_key(sparx5, fen_info, &key);
+	sparx5_rr_fib_info_to_fib_key(fi, &key);
 
 	fib_entry = sparx5_rr_fib_entry_lookup(sparx5, &key);
 	if (!fib_entry)
@@ -1576,7 +2271,7 @@ static bool sparx5_rr_dev_real_is_vlan_aware(struct net_device *dev)
 {
 	struct net_device *vlan_rdev;
 	/* Support l3 offloading for:
-	 *	1) upper vlan interfaces for br0. E.g. br0.10.
+	 *	1) upper vlan interfaces for the bridge.
 	 */
 	if (is_vlan_dev(dev)) {
 		if (netif_is_bridge_port(dev))
@@ -1592,120 +2287,112 @@ static bool sparx5_rr_dev_real_is_vlan_aware(struct net_device *dev)
 	return false;
 }
 
-static bool
-sparx5_rr_fib4_entry_should_offload(struct sparx5 *sparx5,
-				    struct fib_entry_notifier_info *fen_info)
+static bool sparx5_rr_fib_info_should_offload(struct sparx5 *sparx5,
+					      struct sparx5_rr_fib_info *fi)
 {
-	struct fib_info *fi = fen_info->fi;
+	u32 tb_id = sparx5_rr_fib_info_tb_id(fi);
+	u8 type = sparx5_rr_fib_info_type(fi);
+	int nhs = sparx5_rr_fib_info_nhs(fi);
 
-	if (!(fen_info->type == RTN_UNICAST || fen_info->type == RTN_LOCAL))
+	if (!(type == RTN_UNICAST || type == RTN_LOCAL))
 		return false;
 
-	if (!(fen_info->tb_id == RT_TABLE_MAIN ||
-	      fen_info->tb_id == RT_TABLE_LOCAL))
+	if (!(tb_id == RT_TABLE_MAIN ||
+	      tb_id == RT_TABLE_LOCAL))
 		return false;
 
-	if (fi->nh)
+	/* No support for nexthop objects (optimization for larger scale
+	 * routing). Instead each route has a copy of it's nexthops.
+	 */
+	if (sparx5_rr_fib_info_is_nh_obj(fi))
 		return false;
 
-	if (fi->fib_nhs > SPARX5_MAX_ECMP_SIZE)
+	if (nhs > SPARX5_MAX_ECMP_SIZE)
 		return false;
 
-	if (fi->fib_nhs > 0) {
-		for (int i = 0; i < fi->fib_nhs; i++) {
-			struct fib_nh_common *nhc = fib_info_nhc(fi, i);
+	for (int i = 0; i < nhs; i++) {
+		struct fib_nh_common *nhc = sparx5_rr_fib_info_nhc(fi, i);
 
-			if (!sparx5_rr_dev_real_is_vlan_aware(nhc->nhc_dev))
-				return false;
+		if (!sparx5_rr_dev_real_is_vlan_aware(nhc->nhc_dev))
+			return false;
 
-			/* hw only supports equal weight nexthops */
-			if (nhc->nhc_weight != 1)
-				return false;
-		}
+		/* HW only supports equal weight nexthops */
+		if (nhc->nhc_weight != 1)
+			return false;
 	}
 
 	return true;
 }
 
-static int sparx5_rr_fib4_replace(struct sparx5 *sparx5,
-				  struct fib_entry_notifier_info *fen_info)
+static int sparx5_rr_fib_replace(struct sparx5 *sparx5,
+				 struct sparx5_rr_fib_info *fi)
 {
-	struct vcap_control *vctrl = sparx5->vcap_ctrl;
-	struct sparx5_rr_nexthop_group *new_nh_grp;
 	struct sparx5_rr_nexthop_group *old_nh_grp;
 	struct sparx5_rr_fib_entry *fib_entry;
 	struct sparx5_rr_fib_key key;
-	u32 old_vrule_id;
-	int err;
+	int err = 0;
 
-	sparx5_rr_finfo_to_fib_key(sparx5, fen_info, &key);
+	if (sparx5_rr_fib_info_should_ignore(fi))
+		return 0;
+
+	sparx5_rr_fib_info_to_fib_key(fi, &key);
 
 	fib_entry = sparx5_rr_fib_entry_lookup(sparx5, &key);
 
-	if (!sparx5_rr_fib4_entry_should_offload(sparx5, fen_info)) {
+	if (!sparx5_rr_fib_info_should_offload(sparx5, fi)) {
 		/* A previously offloadable fib, is modified to unoffloadable
 		 * state, so we must remove it.
 		 */
 		if (fib_entry)
 			sparx5_rr_fib_entry_destroy(sparx5, fib_entry);
-
 		return 0;
 	}
 
 	if (!fib_entry) {
-		/* Holds ref to fib_info */
-		fib_entry = sparx5_rr_fib_entry_create(sparx5, &key, fen_info);
-		if (!fib_entry) {
+		/* Holds refs to kernel fib_info */
+		fib_entry = sparx5_rr_fib_entry_create(sparx5, &key, fi);
+		if (IS_ERR(fib_entry)) {
 			dev_warn(sparx5->dev, "Failed to create fib entry\n");
+			sparx5_rr_fib_info_offload_mark(sparx5, fi, false,
+							false, true);
 			return PTR_ERR(fib_entry);
 		}
 
-		return sparx5_rr_fib_entry_hw_apply(sparx5, fib_entry);
+		err = sparx5_rr_fib_entry_hw_apply(sparx5, fib_entry);
+		goto out_fib_mark_offload;
 	}
 
 	old_nh_grp = fib_entry->nh_grp;
-	old_vrule_id = fib_entry->hw_route.vrule_id;
 
-	sparx5_rr_fib_entry_fen_info_replace(fib_entry, fen_info);
+	/* Release and allow any previous fib_info to be deleted */
+	sparx5_rr_fib_info_put(&fib_entry->fi);
 
-	if (sparx5_rr_nexthop4_group_equal(old_nh_grp, fen_info->fi))
-		return 0;
-
-	/* Nexthop group changed, prepare new group in SW */
-	new_nh_grp = sparx5_rr_nexthop4_group_create(sparx5, fen_info->fi);
-	if (IS_ERR(new_nh_grp)) {
-		dev_warn(sparx5->dev, "Failed to create nexthop group\n");
-		return PTR_ERR(new_nh_grp);
-	}
-
-	fib_entry->nh_grp = new_nh_grp;
-	new_nh_grp->fib_entry = fib_entry;
-
-	/* Write new rule to HW */
-	err = sparx5_rr_fib_entry_hw_apply(sparx5, fib_entry);
+	/* Hold and replace with new fib_info */
+	err = sparx5_rr_fib_entry_fib_info_add(fib_entry, fi);
 	if (err) {
-		fib_entry->nh_grp = old_nh_grp;
-		new_nh_grp->fib_entry = NULL;
-		sparx5_rr_nexthop4_group_put(sparx5, new_nh_grp);
-		sparx5_rr_fib_entry_destroy(sparx5, fib_entry);
-		return err;
+		dev_err(sparx5->dev, "Failed to replace fib info\n");
+		goto out_fib_mark_offload;
 	}
 
-	/* Clean up old rule, and start routing traffic according to new rule */
-	if (fib_entry->hw_route.vrule_id != old_vrule_id)
-		vcap_del_rule(vctrl, fib_entry->lower_port->ndev, old_vrule_id);
+	/* Nexthop group did not change, so skip group reallocation. */
+	if (sparx5_rr_fib_info_nh_group_equal(old_nh_grp, &fib_entry->fi))
+		goto out_fib_mark_offload;
 
-	/* Remove old unused group */
-	sparx5_rr_nexthop4_group_put(sparx5, old_nh_grp);
+	/* Fib's nexthop group changed, so we must update it */
+	err = sparx5_rr_entry_nexthop_group_update(sparx5, fib_entry);
 
-	return 0;
+out_fib_mark_offload:
+	fib_entry->offload_fail = !!err;
+	sparx5_rr_fib_entry_offload_mark(sparx5, fib_entry);
+	if (err)
+		sparx5_rr_fib_entry_destroy(sparx5, fib_entry);
+	return err;
 }
 
 static void sparx5_rr_fib4_event_work(struct work_struct *work)
 {
 	struct sparx5_fib_event_work *fib_work =
 		container_of(work, struct sparx5_fib_event_work, work);
-	struct fib_entry_notifier_info *fen_info;
 	struct sparx5 *sparx5 = fib_work->sparx5;
 	int err;
 
@@ -1713,43 +2400,259 @@ static void sparx5_rr_fib4_event_work(struct work_struct *work)
 
 	switch (fib_work->event) {
 	case FIB_EVENT_ENTRY_REPLACE:
-		fen_info = &fib_work->fen_info;
-
-		err = sparx5_rr_fib4_replace(sparx5, fen_info);
+		err = sparx5_rr_fib_replace(sparx5, &fib_work->fi);
 		if (err)
 			dev_warn(sparx5->dev, "FIB replace failed, ip=%pI4l\n",
-				 &fen_info->dst);
+				 &fib_work->fi.fen4_info.dst);
 
-		/* Release fib_info hold for workqueue */
-		fib_info_put(fen_info->fi);
 		break;
 	case FIB_EVENT_ENTRY_DEL:
-		fen_info = &fib_work->fen_info;
-		sparx5_rr_fib4_del(sparx5, fen_info);
-		fib_info_put(fen_info->fi);
+		sparx5_rr_fib4_del(sparx5, &fib_work->fi);
+		break;
+	default:
+		/* FIB_EVENT_ENTRY_APPEND only occurs for IPv6. */
+		WARN_ON_ONCE(1); /* BUG */
 		break;
 	}
 
+	/* Release fib_info hold for workqueue. */
+	sparx5_rr_fib_info_put(&fib_work->fi);
 	mutex_unlock(&sparx5->router->lock);
 	kfree(fib_work);
 }
 
-/* Handle fib events. Used to manage fib_entries which are the core routing data.
- * Called with rcu_read_lock()
+static int sparx5_rr_fib6_append(struct sparx5 *sparx5,
+				 struct sparx5_rr_fib_info *fi)
+{
+	struct sparx5_rr_fib_entry *fib_entry;
+	struct sparx5_rr_fib_key key;
+	int err = 0;
+
+	if (sparx5_rr_fib_info_should_ignore(fi))
+		return 0;
+
+	sparx5_rr_fib_info_to_fib_key(fi, &key);
+
+	fib_entry = sparx5_rr_fib_entry_lookup(sparx5, &key);
+	if (!fib_entry)
+		return 0;
+
+	/* Are we adding new nexthops which can not be offloaded */
+	if (!sparx5_rr_fib_info_should_offload(sparx5, fi)) {
+		err = -EINVAL;
+		goto out_fib_mark_offload;
+	}
+
+	/* Append new rt_arr data to fen6_info rt data */
+	err = sparx5_rr_fib_entry_fib_info_add(fib_entry, fi);
+	if (err)
+		goto out_fib_mark_offload;
+
+	/* Realloc nexthop group and apply to hw. */
+	err = sparx5_rr_entry_nexthop_group_update(sparx5, fib_entry);
+
+	sparx5_rr_fib_debug(sparx5, fib_entry, "append");
+
+out_fib_mark_offload:
+	fib_entry->offload_fail = !!err;
+	sparx5_rr_fib_entry_offload_mark(sparx5, fib_entry);
+	if (err)
+		sparx5_rr_fib_entry_destroy(sparx5, fib_entry);
+
+	return err;
+}
+
+static bool sparx5_rr_fib6_rt_exists(struct sparx5_rr_fib6_entry_info *f6i,
+				     struct fib6_info *rt)
+{
+	for (int i = 0; i < f6i->nrt6; i++)
+		if (f6i->rt_arr[i] == rt)
+			return true;
+
+	return false;
+}
+
+static int sparx5_rr_fib6_nexthop_prune(struct sparx5 *sparx5,
+					struct sparx5_rr_fib_entry *fib_entry,
+					struct sparx5_rr_fib6_entry_info *f6i)
+{
+	struct fib6_info **old_rt_arr = fib_entry->fi.fe6_info.rt_arr;
+	unsigned int old_nrt6 = fib_entry->fi.fe6_info.nrt6;
+	unsigned int new_nrt6 = old_nrt6 >= f6i->nrt6 ? old_nrt6 - f6i->nrt6 :
+							0;
+	struct fib6_info **rt_arr;
+	int j = 0;
+
+	rt_arr = kcalloc(new_nrt6, sizeof(struct fib6_info *), GFP_KERNEL);
+	if (!rt_arr)
+		return -ENOMEM;
+
+	for (int i = 0; i < old_nrt6; i++) {
+		struct fib6_info *fi = old_rt_arr[i];
+
+		if (sparx5_rr_fib6_rt_exists(f6i, fi)) {
+			sparx5_rr_rt6_release(fi);
+			continue;
+		}
+
+		rt_arr[j++] = fi;
+	}
+
+	/* Assume incoming f6i only contain live nexthops, and no duplicates. */
+	WARN_ON_ONCE(j != new_nrt6);
+
+	kfree(fib_entry->fi.fe6_info.rt_arr);
+	fib_entry->fi.fe6_info.nrt6 = new_nrt6;
+	fib_entry->fi.fe6_info.rt_arr = rt_arr;
+	return 0;
+}
+
+static int sparx5_rr_fib6_del(struct sparx5 *sparx5,
+			      struct sparx5_rr_fib_info *fi)
+{
+	struct sparx5_rr_fib_entry *fib_entry;
+	int nhs = sparx5_rr_fib_info_nhs(fi);
+	struct sparx5_rr_fib_key key;
+	int err;
+
+	sparx5_rr_fib_info_to_fib_key(fi, &key);
+
+	fib_entry = sparx5_rr_fib_entry_lookup(sparx5, &key);
+	if (!fib_entry)
+		return 0;
+
+	/* Full delete. */
+	if (nhs == sparx5_rr_fib_info_nhs(&fib_entry->fi)) {
+		sparx5_rr_fib_entry_destroy(sparx5, fib_entry);
+		return 0;
+	}
+
+	/* Partial delete. Remove fi nexthops from fib_entry. */
+	err = sparx5_rr_fib6_nexthop_prune(sparx5, fib_entry, &fi->fe6_info);
+	if (err)
+		goto err_nexthop_prune;
+
+	/* Realloc nexthop group and apply to hw. */
+	err = sparx5_rr_entry_nexthop_group_update(sparx5, fib_entry);
+
+	sparx5_rr_fib_debug(sparx5, fib_entry, "prune");
+
+err_nexthop_prune:
+	fib_entry->offload_fail = !!err;
+	sparx5_rr_fib_entry_offload_mark(sparx5, fib_entry);
+	if (err)
+		sparx5_rr_fib_entry_destroy(sparx5, fib_entry);
+
+	return err;
+}
+
+static void sparx5_rr_fib6_event_work(struct work_struct *work)
+{
+	struct sparx5_fib_event_work *fib_work =
+		container_of(work, struct sparx5_fib_event_work, work);
+	struct sparx5_rr_fib_info *fi = &fib_work->fi;
+	struct sparx5 *sparx5 = fib_work->sparx5;
+	int err;
+
+	mutex_lock(&sparx5->router->lock);
+
+	switch (fib_work->event) {
+	case FIB_EVENT_ENTRY_REPLACE:
+		err = sparx5_rr_fib_replace(sparx5, fi);
+		if (err)
+			dev_warn(sparx5->dev, "FIB 6 replace failed.\n");
+
+		break;
+
+	case FIB_EVENT_ENTRY_APPEND:
+		/* Netlink API for IPv6 is different from IPV4. It is possible to
+		 * do partial update/deletes of nexthops on a route. In this case
+		 * fi only contains the nexthops to add/remove, and must be
+		 * merged with the existing nexthops on the route.
+		 * Therefore, we only share fib_replace between IPv6 and IPv4
+		 * logic.
+		 */
+		err = sparx5_rr_fib6_append(sparx5, fi);
+		if (err)
+			dev_warn(sparx5->dev, "FIB 6 append failed.\n");
+
+		break;
+
+	case FIB_EVENT_ENTRY_DEL:
+		err = sparx5_rr_fib6_del(sparx5, fi);
+		if (err)
+			dev_warn(sparx5->dev, "FIB 6 delete failed.\n");
+
+		break;
+
+	default:
+		WARN_ON_ONCE(1); /* BUG */
+		break;
+	}
+
+	/* Release fib6_info holds for workqueue. */
+	sparx5_rr_fib_info_put(fi);
+	mutex_unlock(&sparx5->router->lock);
+	kfree(fib_work);
+}
+
+static int sparx5_rr_fib6_work_init(struct sparx5_fib_event_work *fib_work,
+				    struct fib6_entry_notifier_info *fen6_info)
+{
+	struct sparx5_rr_fib6_entry_info *fib6_info = &fib_work->fi.fe6_info;
+	struct fib6_info *rt = fen6_info->rt;
+	struct fib6_info **rt_arr;
+	struct fib6_info *iter;
+	unsigned int nrt6;
+	int i = 0;
+
+	nrt6 = fen6_info->nsiblings + 1;
+
+	rt_arr = kcalloc(nrt6, sizeof(struct fib6_info *), GFP_ATOMIC);
+	if (!rt_arr)
+		return -ENOMEM;
+
+	fib6_info->rt_arr = rt_arr;
+	fib6_info->nrt6 = nrt6;
+
+	rt_arr[0] = rt;
+	fib6_info_hold(rt);
+
+	if (!fen6_info->nsiblings)
+		return 0;
+
+	list_for_each_entry(iter, &rt->fib6_siblings, fib6_siblings) {
+		if (i == fen6_info->nsiblings)
+			break;
+
+		rt_arr[i + 1] = iter;
+		fib6_info_hold(iter);
+		i++;
+	}
+
+	return 0;
+}
+
+/* Handle fib events, which manage fib_entries. Called in atomic context, with
+ * rcu_read_lock().
  */
 static int sparx5_rr_fib_event(struct notifier_block *nb, unsigned long event,
 			       void *ptr)
 {
+	struct fib6_entry_notifier_info *fen6_info;
 	struct fib_entry_notifier_info *fen_info;
 	struct sparx5_fib_event_work *fib_work;
 	struct fib_notifier_info *info = ptr;
 	struct sparx5_router *router;
+	int err;
 
-	/* Only handle IPv4 for now */
-	if (info->family != AF_INET)
+	/* Handle IPv4 and IPv6  */
+	if (info->family != AF_INET && info->family != AF_INET6)
 		return NOTIFY_DONE;
 
-	if (event != FIB_EVENT_ENTRY_REPLACE && event != FIB_EVENT_ENTRY_DEL)
+	if (event != FIB_EVENT_ENTRY_REPLACE &&
+	    event != FIB_EVENT_ENTRY_DEL &&
+	    event != FIB_EVENT_ENTRY_APPEND)
 		return NOTIFY_DONE;
 
 	router = container_of(nb, struct sparx5_router, fib_nb);
@@ -1767,9 +2670,27 @@ static int sparx5_rr_fib_event(struct notifier_block *nb, unsigned long event,
 
 		fen_info = container_of(info, struct fib_entry_notifier_info,
 					info);
-		fib_work->fen_info = *fen_info;
+		fib_work->fi.fen4_info = *fen_info;
+		fib_work->fi.version = SPARX5_IPV4;
+
 		/* Hold fib_info while item is queued */
-		fib_info_hold(fib_work->fen_info.fi);
+		fib_info_hold(fib_work->fi.fen4_info.fi);
+
+		sparx5_rr_schedule_work(router->sparx5, &fib_work->work);
+		break;
+	case AF_INET6:
+		INIT_WORK(&fib_work->work, sparx5_rr_fib6_event_work);
+
+		/* Copy and hold fib6_info for route and all nhs while item is
+		 * queued.
+		 */
+		fen6_info = container_of(info, struct fib6_entry_notifier_info,
+					 info);
+		err = sparx5_rr_fib6_work_init(fib_work, fen6_info);
+		if (err)
+			goto err_fib6;
+
+		fib_work->fi.version = SPARX5_IPV6;
 
 		sparx5_rr_schedule_work(router->sparx5, &fib_work->work);
 		break;
@@ -1781,6 +2702,7 @@ static int sparx5_rr_fib_event(struct notifier_block *nb, unsigned long event,
 
 err_fam_unhandled:
 	WARN_ON_ONCE(1); /* BUG */
+err_fib6:
 	kfree(fib_work);
 	return NOTIFY_BAD;
 }
@@ -1789,25 +2711,30 @@ static void sparx5_rr_neigh_event_work(struct work_struct *work)
 {
 	struct sparx5_rr_netevent_work *net_work =
 		container_of(work, struct sparx5_rr_netevent_work, work);
-	struct sparx5 *sparx5 = net_work->sparx5;
 	unsigned char hwaddr[ETH_ALEN] __aligned(2);
-	struct sparx5_rr_neigh_entry *entry;
+	struct sparx5 *sparx5 = net_work->sparx5;
+	struct sparx5_rr_neigh_key key = { 0 };
 	struct neighbour *n = net_work->neigh;
-	struct sparx5_rr_neigh_key key;
-	struct net_device *ndev;
+	struct sparx5_rr_neigh_entry *entry;
 	bool entry_connected;
 	u8 nud_state, dead;
 
+	sparx5_rr_nb2neigh_key(n, &key);
+
+	/* Frames with link-local dip are trapped, so ignore the neighbour. */
+	if (sparx5_rr_addr_is_link_local(&key.iaddr))
+		goto out;
+
+	/* If n changes after this read section, we will get another neigh event,
+	 * which is processed after the current one.
+	 */
 	read_lock_bh(&n->lock);
 	ether_addr_copy(hwaddr, n->ha);
-	ndev = n->dev;
 	nud_state = n->nud_state;
 	dead = n->dead;
 	read_unlock_bh(&n->lock);
 
 	mutex_lock(&sparx5->router->lock);
-
-	sparx5_rr_nb2neigh_key(n, &key);
 
 	entry_connected = nud_state & NUD_VALID && !dead;
 	entry = sparx5_rr_neigh_entry_lookup(sparx5, &key);
@@ -1832,16 +2759,20 @@ static void sparx5_rr_neigh_event_work(struct work_struct *work)
 
 out_mutex:
 	mutex_unlock(&sparx5->router->lock);
+out:
 	neigh_release(n);
 	kfree(net_work);
 }
 
-/* Handle neighbour update events. Used to manage neigh_entries. */
+/* Handle neighbour update events. Used to manage neigh_entries. Called in atomic
+ * context, with rcu_read_lock().
+ */
 static int sparx5_rr_netevent_event(struct notifier_block *nb,
 				    unsigned long event, void *ptr)
 {
 	struct sparx5_rr_netevent_work *net_work;
 	struct sparx5_router *router;
+	struct sparx5_port *port;
 	struct neighbour *n;
 
 	router = container_of(nb, struct sparx5_router, netevent_nb);
@@ -1850,7 +2781,11 @@ static int sparx5_rr_netevent_event(struct notifier_block *nb,
 	case NETEVENT_NEIGH_UPDATE:
 		n = ptr;
 
-		if (n->tbl->family != AF_INET)
+		if (n->tbl->family != AF_INET && n->tbl->family != AF_INET6)
+			return NOTIFY_DONE;
+
+		port = sparx5_port_dev_lower_find(n->dev);
+		if (!port)
 			return NOTIFY_DONE;
 
 		net_work = kzalloc(sizeof(*net_work), GFP_ATOMIC);
@@ -1913,19 +2848,32 @@ static void sparx5_rr_leg_base_mac_set(struct sparx5 *sparx5,
 }
 
 static bool
-sparx5_rr_router_leg_addr_list_empty(struct sparx5_rr_router_leg *leg)
+sparx5_rr_router_leg_addr_list_empty_rcu(struct sparx5_rr_router_leg *leg)
 {
+	struct inet6_dev *inet6_dev;
 	struct in_device *in_dev;
 
-	rcu_read_lock();
 	in_dev = __in_dev_get_rcu(leg->dev);
-	if (in_dev && in_dev->ifa_list) {
-		rcu_read_unlock();
+	if (in_dev && in_dev->ifa_list)
 		return false;
-	}
-	rcu_read_unlock();
+
+	inet6_dev = __in6_dev_get(leg->dev);
+	if (inet6_dev && !list_empty(&inet6_dev->addr_list))
+		return false;
 
 	return true;
+}
+
+static bool
+sparx5_rr_router_leg_addr_list_empty(struct sparx5_rr_router_leg *leg)
+{
+	bool addr_list_empty;
+
+	rcu_read_lock();
+	addr_list_empty = sparx5_rr_router_leg_addr_list_empty_rcu(leg);
+	rcu_read_unlock();
+
+	return addr_list_empty;
 }
 
 static int __sparx5_rr_inetaddr_event(struct sparx5 *sparx5,
@@ -1938,7 +2886,7 @@ static int __sparx5_rr_inetaddr_event(struct sparx5 *sparx5,
 	if (!sparx5_rr_dev_real_is_vlan_aware(dev))
 		return 0;
 
-	/* Our basic case: ipv4 addr/subnet added to vlan upper of
+	/* Our basic case: ip addr/subnet added to vlan upper of
 	 * bridge dev.
 	 */
 	switch (event) {
@@ -1969,51 +2917,115 @@ static int __sparx5_rr_inetaddr_event(struct sparx5 *sparx5,
 	return 0;
 }
 
-/* Handle events for ip address changes on ifs. Used to manage router legs. */
+static int sparx5_rr_inetaddr_event_handle(struct sparx5 *sparx5,
+					   struct net_device *dev,
+					   unsigned long event)
+{
+	int err;
+
+	mutex_lock(&sparx5->router->lock);
+	err = __sparx5_rr_inetaddr_event(sparx5, dev, event);
+	mutex_unlock(&sparx5->router->lock);
+
+	return notifier_from_errno(err);
+}
+
+/* Called with RTNL. */
+static int sparx5_rr_inet6addr_valid_event(struct notifier_block *nb,
+					   unsigned long event, void *ptr)
+{
+	struct in6_validator_info *i6vi = (struct in6_validator_info *)ptr;
+	struct net_device *dev = i6vi->i6vi_dev->dev;
+	struct sparx5_router *router;
+
+	if (event != NETDEV_UP)
+		return NOTIFY_DONE;
+
+	router = container_of(nb, struct sparx5_router, inet6addr_valid_nb);
+
+	return sparx5_rr_inetaddr_event_handle(router->sparx5, dev, event);
+}
+
+static void sparx5_rr_inet6addr_event_work(struct work_struct *work)
+{
+	struct sparx5_rr_inet6addr_event_work *addr_work =
+		container_of(work, struct sparx5_rr_inet6addr_event_work, work);
+	struct sparx5_router *router = addr_work->sparx5->router;
+
+	rtnl_lock();
+	mutex_lock(&router->lock);
+
+	__sparx5_rr_inetaddr_event(addr_work->sparx5, addr_work->dev,
+				   addr_work->event);
+
+	mutex_unlock(&router->lock);
+	rtnl_unlock();
+	netdev_put(addr_work->dev, NULL);
+	kfree(addr_work);
+}
+
+/* Called in atomic context. */
+static int sparx5_rr_inet6addr_event(struct notifier_block *nb,
+				     unsigned long event, void *ptr)
+{
+	struct inet6_ifaddr *if6 = (struct inet6_ifaddr *)ptr;
+	struct sparx5_rr_inet6addr_event_work *work;
+	struct net_device *dev = if6->idev->dev;
+	struct sparx5_router *router;
+
+	if (event != NETDEV_DOWN)
+		return NOTIFY_DONE;
+
+	work = kzalloc(sizeof(*work), GFP_ATOMIC);
+	if (!work)
+		return NOTIFY_BAD;
+
+	router = container_of(nb, struct sparx5_router, inet6addr_nb);
+	INIT_WORK(&work->work, sparx5_rr_inet6addr_event_work);
+	work->sparx5 = router->sparx5;
+	work->dev = dev;
+	work->event = event;
+	netdev_hold(dev, NULL, GFP_ATOMIC);
+	sparx5_rr_schedule_work(router->sparx5, &work->work);
+
+	return NOTIFY_DONE;
+}
+
+/* Handle events for ip address changes on ifs. Used to manage router legs.
+ * Called with RTNL.
+ */
 static int sparx5_rr_inetaddr_event(struct notifier_block *nb,
 				    unsigned long event, void *ptr)
 {
 	struct in_ifaddr *ifa = (struct in_ifaddr *)ptr;
 	struct net_device *dev = ifa->ifa_dev->dev;
 	struct sparx5_router *router;
-	int err = 0;
 
 	if (event != NETDEV_DOWN)
-		return notifier_from_errno(err);
+		return NOTIFY_DONE;
 
 	router = container_of(nb, struct sparx5_router, inetaddr_nb);
-	mutex_lock(&router->lock);
 
-	err = __sparx5_rr_inetaddr_event(router->sparx5, dev, event);
-
-	mutex_unlock(&router->lock);
-
-	return notifier_from_errno(err);
+	return sparx5_rr_inetaddr_event_handle(router->sparx5, dev, event);
 }
 
+/* Called with RTNL. */
 static int sparx5_rr_inetaddr_valid_event(struct notifier_block *nb,
 					  unsigned long event, void *ptr)
 {
 	struct in_validator_info *ivi = (struct in_validator_info *)ptr;
 	struct net_device *dev = ivi->ivi_dev->dev;
 	struct sparx5_router *router;
-	struct sparx5 *sparx5;
-	int err = 0;
 
 	if (event != NETDEV_UP)
 		return NOTIFY_DONE;
 
 	router = container_of(nb, struct sparx5_router, inetaddr_valid_nb);
-	sparx5 = router->sparx5;
 
-	mutex_lock(&sparx5->router->lock);
-
-	err = __sparx5_rr_inetaddr_event(sparx5, dev, event);
-
-	mutex_unlock(&sparx5->router->lock);
-	return notifier_from_errno(err);
+	return sparx5_rr_inetaddr_event_handle(router->sparx5, dev, event);
 }
 
+/* Called with RTNL. */
 static int sparx5_rr_netdevice_event(struct notifier_block *nb,
 				     unsigned long event, void *ptr)
 {
@@ -2086,6 +3098,17 @@ int sparx5_rr_router_init(struct sparx5 *sparx5)
 	if (err)
 		goto err_register_netdevice_notifier;
 
+	router->inet6addr_valid_nb.notifier_call =
+		sparx5_rr_inet6addr_valid_event;
+	err = register_inet6addr_validator_notifier(&router->inet6addr_valid_nb);
+	if (err)
+		goto err_register_inet6addr_valid_notifier;
+
+	router->inet6addr_nb.notifier_call = sparx5_rr_inet6addr_event;
+	err = register_inet6addr_notifier(&router->inet6addr_nb);
+	if (err)
+		goto err_register_inet6addr_notifier;
+
 	err = rhashtable_init(&router->neigh_ht,
 			      &sparx5_neigh_ht_params);
 	if (err)
@@ -2097,8 +3120,18 @@ int sparx5_rr_router_init(struct sparx5 *sparx5)
 		goto err_fib_ht_init;
 
 	INIT_LIST_HEAD(&router->leg_list);
-	INIT_LIST_HEAD(&router->fib_lpm_list);
+	INIT_LIST_HEAD(&router->fib_lpm4_list);
+	INIT_LIST_HEAD(&router->fib_lpm6_list);
+
 	atomic_set(&router->legs_count, 0);
+	router->link_local.vrule_id = 0;
+	router->link_local.vrule_id_valid = false;
+	/* VCAP API requires a port net_device, to get a sparx5 reference. */
+	router->port_dev = sparx5_port_get_ndev(sparx5);
+	if (!router->port_dev) {
+		err = -ENXIO;
+		goto err_get_port_dev;
+	}
 
 	/* Enable L3 UC routing on all ports.
 	 * TODO: track ports which are part of some VLAN with RLEG ENA.
@@ -2113,11 +3146,17 @@ int sparx5_rr_router_init(struct sparx5 *sparx5)
 	spx5_rmw(ANA_L3_ROUTING_CFG_L3_ENA_MODE_SET(1) |
 		 ANA_L3_ROUTING_CFG_RT_SMAC_UPDATE_ENA_SET(1) |
 		 ANA_L3_ROUTING_CFG_CPU_RLEG_IP_HDR_FAIL_REDIR_ENA_SET(1) |
-		 ANA_L3_ROUTING_CFG_CPU_IP4_OPTIONS_REDIR_ENA_SET(1),
+		 ANA_L3_ROUTING_CFG_CPU_IP4_OPTIONS_REDIR_ENA_SET(1) |
+		 ANA_L3_ROUTING_CFG_CPU_IP6_HOPBYHOP_REDIR_ENA_SET(1) |
+		 ANA_L3_ROUTING_CFG_IP6_HC_REDIR_ENA_SET(1) |
+		 ANA_L3_ROUTING_CFG_IP4_TTL_REDIR_ENA_SET(1),
 		 ANA_L3_ROUTING_CFG_L3_ENA_MODE |
 		 ANA_L3_ROUTING_CFG_RT_SMAC_UPDATE_ENA |
 		 ANA_L3_ROUTING_CFG_CPU_RLEG_IP_HDR_FAIL_REDIR_ENA |
-		 ANA_L3_ROUTING_CFG_CPU_IP4_OPTIONS_REDIR_ENA,
+		 ANA_L3_ROUTING_CFG_CPU_IP4_OPTIONS_REDIR_ENA |
+		 ANA_L3_ROUTING_CFG_CPU_IP6_HOPBYHOP_REDIR_ENA |
+		 ANA_L3_ROUTING_CFG_IP6_HC_REDIR_ENA |
+		 ANA_L3_ROUTING_CFG_IP4_TTL_REDIR_ENA,
 		 sparx5, ANA_L3_ROUTING_CFG);
 
 	/* By default, routing related frame edits are done in REW, but when
@@ -2134,12 +3173,18 @@ int sparx5_rr_router_init(struct sparx5 *sparx5)
 
 	return 0;
 
+err_get_port_dev:
+	rhashtable_destroy(&router->fib_ht);
 err_fib_ht_init:
 	rhashtable_destroy(&router->neigh_ht);
 err_neigh_ht_init:
-	unregister_inetaddr_validator_notifier(&router->inetaddr_valid_nb);
-err_register_netdevice_notifier:
+	unregister_inet6addr_notifier(&router->inet6addr_nb);
+err_register_inet6addr_notifier:
+	unregister_inet6addr_validator_notifier(&router->inet6addr_valid_nb);
+err_register_inet6addr_valid_notifier:
 	unregister_netdevice_notifier(&router->netdevice_nb);
+err_register_netdevice_notifier:
+	unregister_inetaddr_validator_notifier(&router->inetaddr_valid_nb);
 err_register_inetaddr_valid_notifier:
 	unregister_inetaddr_notifier(&router->inetaddr_nb);
 err_register_inetaddr_notifier:
@@ -2159,14 +3204,16 @@ void sparx5_rr_router_deinit(struct sparx5 *sparx5)
 {
 	struct sparx5_router *router = sparx5->router;
 
-	rhashtable_destroy(&sparx5->router->fib_ht);
-	rhashtable_destroy(&sparx5->router->neigh_ht);
-	unregister_netdevice_notifier(&sparx5->router->netdevice_nb);
-	unregister_inetaddr_validator_notifier(&sparx5->router->inetaddr_valid_nb);
-	unregister_inetaddr_notifier(&sparx5->router->inetaddr_nb);
-	unregister_netevent_notifier(&sparx5->router->netevent_nb);
+	rhashtable_destroy(&router->fib_ht);
+	rhashtable_destroy(&router->neigh_ht);
+	unregister_inet6addr_notifier(&router->inet6addr_nb);
+	unregister_inet6addr_validator_notifier(&router->inet6addr_valid_nb);
+	unregister_netdevice_notifier(&router->netdevice_nb);
+	unregister_inetaddr_validator_notifier(&router->inetaddr_valid_nb);
+	unregister_inetaddr_notifier(&router->inetaddr_nb);
+	unregister_netevent_notifier(&router->netevent_nb);
 	unregister_fib_notifier(&init_net, &router->fib_nb);
-	destroy_workqueue(sparx5->router->sparx5_router_owq);
+	destroy_workqueue(router->sparx5_router_owq);
 	mutex_destroy(&router->lock);
 	kfree(router);
 }
