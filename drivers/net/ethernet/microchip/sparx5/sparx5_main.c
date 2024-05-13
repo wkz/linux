@@ -936,13 +936,19 @@ static int mchp_sparx5_probe(struct platform_device *pdev)
 		else
 			sparx5->sd_sgpio_remapping = true;
 		serdes = devm_of_phy_get(sparx5->dev, portnp, NULL);
-		if (IS_ERR(serdes) &&
-		    !phy_interface_mode_is_rgmii(conf->phy_mode)) {
-			err = dev_err_probe(sparx5->dev, PTR_ERR(serdes),
-					    "port %u: missing serdes\n",
-					    portno);
-			of_node_put(portnp);
-			goto cleanup_config;
+		if (IS_ERR(serdes)) {
+			if (!phy_interface_mode_is_rgmii(conf->phy_mode)) {
+				err = dev_err_probe(sparx5->dev, PTR_ERR(serdes),
+						    "port %u: missing serdes\n",
+						    portno);
+				of_node_put(portnp);
+				goto cleanup_config;
+			} else {
+				/* Clear the error from the serdes as this is
+				 * used to check if there is serdes or not
+				 */
+				serdes = NULL;
+			}
 		}
 		config->portno = portno;
 		config->node = portnp;

@@ -150,7 +150,7 @@ static int sparx5_port_open(struct net_device *ndev)
 
 	phylink_start(port->phylink);
 
-	if (!ndev->phydev) {
+	if (port->serdes) {
 		/* power up serdes */
 		port->conf.power_down = false;
 		if (port->conf.serdes_reset)
@@ -183,7 +183,7 @@ static int sparx5_port_stop(struct net_device *ndev)
 	phylink_stop(port->phylink);
 	phylink_disconnect_phy(port->phylink);
 
-	if (!ndev->phydev) {
+	if (port->serdes) {
 		/* power down serdes */
 		port->conf.power_down = true;
 		if (port->conf.serdes_reset)
