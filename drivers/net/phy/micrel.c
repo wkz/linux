@@ -360,6 +360,12 @@
 /* Delay used to get the second part from the LTC */
 #define LAN8841_GET_SEC_LTC_DELAY		(500 * NSEC_PER_MSEC)
 
+/* Number of times to check the link after starting aneg */
+#define LAN8814_CHECK_LINK_MAX			5
+
+#define LAN8814_AX_AN_STATUS			0x14
+#define LAN8814_AX_AN_STATUS_SIG_DET		BIT(13)
+
 struct kszphy_hw_stat {
 	const char *string;
 	u8 reg;
@@ -458,6 +464,11 @@ struct kszphy_priv {
 	u64 stats[ARRAY_SIZE(kszphy_hw_stats)];
 
 	int rev;
+
+	struct delayed_work phy_aneg_work;
+	uint8_t check_link;
+	bool restarted_aneg;
+	struct phy_device *phydev;
 };
 
 static const struct kszphy_type lan8814_type = {
@@ -3771,6 +3782,17 @@ void lan8814_link_change_notify(struct phy_device *phydev)
 	struct kszphy_priv *priv = phydev->priv;
 
 	lan8814_latency_config(phydev, &priv->latencies);
+
+	/* Even if the link goes down don't stop the workqueue because it is
+	 * possible that the link partner is down, so when the partner comes up,
+	 * we might need to check again for autonegotation. So keep it running
+	 * and just reset the check_link and restarted_aneg for next time when
+	 * the link partner comes up
+	 */
+	if (!phydev->link) {
+		priv->check_link = 0;
+		priv->restarted_aneg = false;
+	}
 }
 
 static int lan8804_config_init(struct phy_device *phydev)
@@ -4147,6 +4169,31 @@ static int lan8814_config_init(struct phy_device *phydev)
 	return lan8814_rev_workaround(phydev);
 }
 
+static int lan8814_config_aneg(struct phy_device *phydev)
+{
+	struct kszphy_priv *priv = phydev->priv;
+
+	/* Start the workqueue only if the autonegotation is enabled. If it is
+	 * not then there is no need for this thread
+	 */
+	priv->check_link = 0;
+	priv->restarted_aneg = false;
+	if (phydev->autoneg == AUTONEG_ENABLE)
+		schedule_delayed_work(&priv->phy_aneg_work, msecs_to_jiffies(1000));
+	else
+		cancel_delayed_work_sync(&priv->phy_aneg_work);
+
+	return genphy_config_aneg(phydev);
+}
+
+static int lan8814_suspend(struct phy_device *phydev)
+{
+	struct kszphy_priv *priv = phydev->priv;
+
+	cancel_delayed_work_sync(&priv->phy_aneg_work);
+	return genphy_suspend(phydev);
+}
+
 /* It is expected that there will not be any 'lan8814_take_coma_mode'
  * function called in suspend. Because the GPIO line can be shared, so if one of
  * the phys goes back in coma mode, then all the other PHYs will go, which is
@@ -4232,6 +4279,54 @@ static void lan8814_workarounds_in_probe(struct phy_device *phydev)
 	}
 }
 
+/* It was seen that sometimes the autonegotation will fail and basically just
+ * kicking again the autonegotation will get it working. Therefore have this
+ * thread that checks if the autonegation has failed, then just start it again.
+ * We need to run this all the time while the autonegation is enabled.
+ */
+static void lan8814_phy_aneg_work(struct work_struct *phy_aneg_work)
+{
+	struct kszphy_priv *priv =
+		container_of(phy_aneg_work, struct kszphy_priv, phy_aneg_work.work);
+	struct phy_device *phydev = priv->phydev;
+
+	/* If there is a link, then just stop there is nothing else to check */
+	if (phydev->link)
+		goto out;
+
+	/* If the autoneg is completed then there is nothing to do */
+	if (phy_read(phydev, MII_BMSR) & BMSR_ANEGCOMPLETE)
+		goto out;
+
+	/* If autonegotation was restarted already then there is nothing else
+	 * that can be done
+	 */
+	if (priv->restarted_aneg)
+		goto out;
+
+	/* If there is no signal from the partner then reschedule this work
+	 * because we don't know yet if the autonegotation failed or not
+	 */
+	if (!(phy_read(phydev, LAN8814_AX_AN_STATUS) &
+	      LAN8814_AX_AN_STATUS_SIG_DET))
+		goto out;
+
+	/* Lets give it some time to retry to check the link and only after it
+	 * fails multiple times then try to restart autoneg
+	 */
+	if (priv->check_link < LAN8814_CHECK_LINK_MAX) {
+		priv->check_link++;
+		goto out;
+	}
+
+	genphy_config_aneg(phydev);
+	priv->restarted_aneg = true;
+
+	/* Reschedule the work in 1 second */
+out:
+	schedule_delayed_work(&priv->phy_aneg_work, msecs_to_jiffies(1000));
+}
+
 static int lan8814_probe(struct phy_device *phydev)
 {
 	const struct kszphy_type *type = phydev->drv->driver_data;
@@ -4246,6 +4341,7 @@ static int lan8814_probe(struct phy_device *phydev)
 	phydev->priv = priv;
 
 	priv->type = type;
+	priv->phydev = phydev;
 
 	kszphy_parse_led_mode(phydev);
 
@@ -4270,6 +4366,7 @@ static int lan8814_probe(struct phy_device *phydev)
 	lan8814_get_latency(phydev);
 
 	lan8814_workarounds_in_probe(phydev);
+	INIT_DELAYED_WORK(&priv->phy_aneg_work, lan8814_phy_aneg_work);
 
 	return 0;
 }
@@ -5800,6 +5897,7 @@ static struct phy_driver ksphy_driver[] = {
 	.name		= "Microchip INDY Gigabit Quad PHY",
 	.flags          = PHY_POLL_CABLE_TEST,
 	.config_init	= lan8814_config_init,
+	.config_aneg	= lan8814_config_aneg,
 	.driver_data	= &lan8814_type,
 	.probe		= lan8814_probe,
 	.soft_reset	= genphy_soft_reset,
@@ -5807,7 +5905,7 @@ static struct phy_driver ksphy_driver[] = {
 	.get_sset_count	= kszphy_get_sset_count,
 	.get_strings	= kszphy_get_strings,
 	.get_stats	= kszphy_get_stats,
-	.suspend	= genphy_suspend,
+	.suspend	= lan8814_suspend,
 	.resume		= kszphy_resume,
 	.config_intr	= lan8814_config_intr,
 	.handle_interrupt = lan8814_handle_interrupt,
