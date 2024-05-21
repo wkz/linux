@@ -61,7 +61,7 @@ static void lan966x_fdma_pci_rx_free(struct lan966x_rx *rx)
 			  rx->dcbs,
 			  rx->dma);
 
-	lan966x_pci_atu_region_unmap(rx->lan966x, rx->atu);
+	fdma_pci_atu_region_unmap(rx->atu_region);
 }
 
 static void lan966x_fdma_pci_tx_free(struct lan966x_tx *tx)
@@ -73,7 +73,7 @@ static void lan966x_fdma_pci_tx_free(struct lan966x_tx *tx)
 			  tx->dcbs,
 			  tx->dma);
 
-	lan966x_pci_atu_region_unmap(tx->lan966x, tx->atu);
+	fdma_pci_atu_region_unmap(tx->atu_region);
 }
 
 static void lan966x_fdma_pci_rx_add_dcb(struct lan966x_rx *rx,
@@ -85,8 +85,8 @@ static void lan966x_fdma_pci_rx_add_dcb(struct lan966x_rx *rx,
 	dcb->nextptr = FDMA_DCB_INVALID_DATA;
 	dcb->info = FDMA_DCB_INFO_DATAL(FDMA_PCI_DB_SIZE(rx->max_mtu));
 
-	rx->last_entry->nextptr = lan966x_pci_atu_get_mapped_addr(rx->atu,
-								  nextptr);
+	rx->last_entry->nextptr = fdma_pci_atu_get_mapped_addr(rx->atu_region,
+							       nextptr);
 	rx->last_entry = dcb;
 }
 
@@ -105,15 +105,15 @@ static void lan966x_fdma_pci_rx_setup(struct lan966x_rx *rx)
 
 		/* For each DB, map it to the dataptr of the DCB. */
 		for (int j = 0; j < FDMA_RX_DCB_MAX_DBS; ++j) {
-			struct lan966x_pci_atu_region *region = rx->atu;
+			struct fdma_pci_atu_region *region = rx->atu_region;
 			dma_addr_t addr = lan966x_fdma_pci_rx_db_dma_get(rx,
 									 i,
 									 j);
 
 			db = &dcb->db[j];
 			db->status = 0;
-			db->dataptr = lan966x_pci_atu_get_mapped_addr(region,
-								      addr);
+			db->dataptr = fdma_pci_atu_get_mapped_addr(region,
+								   addr);
 		}
 
 		lan966x_fdma_pci_rx_add_dcb(rx,
@@ -139,20 +139,22 @@ static int lan966x_fdma_pci_rx_alloc(struct lan966x_rx *rx)
 	if (!rx->dcbs)
 		return -ENOMEM;
 
-	rx->atu = lan966x_pci_atu_region_map(lan966x,
-					     rx->dma,
-					     FDMA_PCI_RX_DMA_SIZE(max_mtu));
-	if (IS_ERR(rx->atu)) {
+	rx->atu_region = fdma_pci_atu_region_map(&lan966x->atu,
+						 rx->dma,
+						 FDMA_PCI_RX_DMA_SIZE(max_mtu));
+	if (IS_ERR(rx->atu_region)) {
 		dma_free_coherent(lan966x->dev,
 				  FDMA_PCI_RX_DMA_SIZE(max_mtu),
 				  rx->dcbs,
 				  rx->dma);
-		return PTR_ERR(rx->atu);
+		return PTR_ERR(rx->atu_region);
 	}
 
 	lan966x_fdma_pci_rx_setup(rx);
 
-	lan966x_fdma_llp_configure(lan966x, rx->atu->base_addr, rx->channel_id);
+	lan966x_fdma_llp_configure(lan966x,
+				   rx->atu_region->base_addr,
+				   rx->channel_id);
 
 	return 0;
 }
@@ -168,7 +170,8 @@ static void lan966x_fdma_pci_tx_setup_dcb(struct lan966x_tx *tx,
 	next_dcb->nextptr = FDMA_DCB_INVALID_DATA;
 
 	next_db = &next_dcb->db[0];
-	next_db->dataptr = lan966x_pci_atu_get_mapped_addr(tx->atu, dma_addr);
+	next_db->dataptr = fdma_pci_atu_get_mapped_addr(tx->atu_region,
+							dma_addr);
 
 	next_db->status = FDMA_DCB_STATUS_SOF |
 			  FDMA_DCB_STATUS_EOF |
@@ -220,21 +223,23 @@ static int lan966x_fdma_pci_tx_alloc(struct lan966x_tx *tx)
 		return -ENOMEM;
 	}
 
-	tx->atu = lan966x_pci_atu_region_map(lan966x,
-					     tx->dma,
-					     FDMA_PCI_TX_DMA_SIZE(max_mtu));
-	if (IS_ERR(tx->atu)) {
+	tx->atu_region = fdma_pci_atu_region_map(&lan966x->atu,
+						 tx->dma,
+						 FDMA_PCI_TX_DMA_SIZE(max_mtu));
+	if (IS_ERR(tx->atu_region)) {
 		dma_free_coherent(lan966x->dev,
 				  FDMA_PCI_RX_DMA_SIZE(max_mtu),
 				  tx->dcbs,
 				  tx->dma);
 		kfree(tx->dcbs_buf);
-		return PTR_ERR(tx->atu);
+		return PTR_ERR(tx->atu_region);
 	}
 
 	lan966x_fdma_pci_tx_setup(tx);
 
-	lan966x_fdma_llp_configure(lan966x, tx->atu->base_addr, tx->channel_id);
+	lan966x_fdma_llp_configure(lan966x,
+				   tx->atu_region->base_addr,
+				   tx->channel_id);
 
 	return 0;
 }
@@ -362,8 +367,8 @@ static void lan966x_fdma_pci_tx_start(struct lan966x_tx *tx, int next_to_use)
 	if (likely(lan966x->tx.activated)) {
 		/* Connect current dcb to the next db */
 		dcb = &tx->dcbs[tx->last_in_use];
-		dcb->nextptr = lan966x_pci_atu_get_mapped_addr(tx->atu,
-							       tx->dma + offs);
+		dcb->nextptr = fdma_pci_atu_get_mapped_addr(tx->atu_region,
+							    tx->dma + offs);
 
 		lan966x_fdma_tx_reload(tx);
 	} else {
@@ -617,14 +622,18 @@ static void lan966x_fdma_pci_reset_mem(struct lan966x *lan966x)
 	lan966x_fdma_pci_rx_setup(rx);
 	lan966x_fdma_pci_tx_setup(tx);
 
-	lan966x_fdma_llp_configure(lan966x, rx->atu->base_addr, rx->channel_id);
-	lan966x_fdma_llp_configure(lan966x, tx->atu->base_addr, tx->channel_id);
+	lan966x_fdma_llp_configure(lan966x,
+				   rx->atu_region->base_addr,
+				   rx->channel_id);
+	lan966x_fdma_llp_configure(lan966x,
+				   tx->atu_region->base_addr,
+				   tx->channel_id);
 }
 
 static int lan966x_fdma_pci_reload(struct lan966x *lan966x, int new_mtu)
 {
-	struct lan966x_pci_atu_region *rx_atu = lan966x->rx.atu;
-	struct lan966x_pci_atu_region *tx_atu = lan966x->tx.atu;
+	struct fdma_pci_atu_region *rx_atu = lan966x->rx.atu_region;
+	struct fdma_pci_atu_region *tx_atu = lan966x->tx.atu_region;
 	struct lan966x_tx_dcb_buf *tx_dcbs_buf;
 	u32 old_mtu = lan966x->rx.max_mtu;
 	int err, rx_size, tx_size;
@@ -662,8 +671,8 @@ static int lan966x_fdma_pci_reload(struct lan966x *lan966x, int new_mtu)
 	/* Free and unmap old memory */
 	dma_free_coherent(lan966x->dev, rx_size, rx_dcbs, rx_dma);
 	dma_free_coherent(lan966x->dev, tx_size, tx_dcbs, tx_dma);
-	lan966x_pci_atu_region_unmap(lan966x, rx_atu);
-	lan966x_pci_atu_region_unmap(lan966x, tx_atu);
+	fdma_pci_atu_region_unmap(rx_atu);
+	fdma_pci_atu_region_unmap(tx_atu);
 	kfree(tx_dcbs_buf);
 
 	lan966x_fdma_wakeup_netdev(lan966x);
@@ -682,8 +691,8 @@ restore:
 	lan966x->tx.dma = tx_dma;
 	lan966x->tx.dcbs = tx_dcbs;
 	lan966x->tx.dcbs_buf = tx_dcbs_buf;
-	lan966x->rx.atu = rx_atu;
-	lan966x->tx.atu = tx_atu;
+	lan966x->rx.atu_region = rx_atu;
+	lan966x->tx.atu_region = tx_atu;
 
 	lan966x_fdma_pci_reset_mem(lan966x);
 
@@ -742,6 +751,11 @@ static int lan966x_fdma_pci_init(struct lan966x *lan966x)
 	if (!lan966x->fdma)
 		return 0;
 
+	/* The data blocks must be placed on 128-byte word aligned addresses in
+	 * memory, and their length must be a multiple of 128 bytes.
+	 */
+	fdma_pci_atu_init(&lan966x->atu, lan966x->regs[TARGET_PCIE_DBI]);
+
 	lan966x->rx.lan966x = lan966x;
 	lan966x->rx.channel_id = FDMA_XTR_CHANNEL;
 	lan966x->rx.max_mtu = lan966x_fdma_get_max_frame(lan966x);
@@ -749,10 +763,6 @@ static int lan966x_fdma_pci_init(struct lan966x *lan966x)
 	lan966x->tx.channel_id = FDMA_INJ_CHANNEL;
 	lan966x->tx.last_in_use = -1;
 
-	/* The data blocks must be placed on 128-byte word aligned addresses in
-	 * memory, and their length must be a multiple of 128 bytes.
-	 */
-	lan966x_pci_atu_init(lan966x);
 	err = lan966x_fdma_pci_rx_alloc(&lan966x->rx);
 	if (err)
 		return err;
