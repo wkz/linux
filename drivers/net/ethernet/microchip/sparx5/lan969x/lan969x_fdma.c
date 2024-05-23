@@ -130,7 +130,7 @@ static struct sk_buff *lan969x_fdma_rx_get_frame(struct sparx5 *sparx5,
 	if (unlikely(!skb))
 		goto unmap_page;
 
-	skb_put(skb, FDMA_DCB_STATUS_BLOCKL(db->status));
+	skb_put(skb, fdma_db_len_get(db));
 
 	sparx5_ifh_parse(sparx5, (u32 *)skb->data, &fi);
 #ifdef CONFIG_SPARX5_SWITCH_APPL
@@ -204,23 +204,22 @@ static int lan969x_fdma_napi_poll(struct napi_struct *napi, int weight)
 
 	/* Get all received skb */
 	while (counter < weight) {
-		if (!lan969x_fdma_rx_more_frames(rx))
+		if (!fdma_has_frames(fdma))
 			break;
 
 		skb = lan969x_fdma_rx_get_frame(sparx5, rx);
 
 		napi_gro_receive(&rx->napi, skb);
 
-		fdma->db_index++;
+		fdma_db_advance(fdma);
 		counter++;
 		/* Check if the DCB can be reused */
-		if (fdma->db_index != consts->fdma_db_cnt)
+		if (fdma_dcb_is_reusable(fdma))
 			continue;
 
-		fdma->db_index = 0;
+		fdma_db_reset(fdma);
 		rx->page[fdma->dcb_index][fdma->db_index] = NULL;
-		fdma->dcb_index++;
-		fdma->dcb_index &= fdma->n_dcbs - 1;
+		fdma_dcb_advance(fdma);
 
 		if (!skb)
 			break;
