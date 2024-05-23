@@ -116,22 +116,8 @@ extern const u8 ifh_smac[];
 
 #define FDMA_DCB_MAX			64
 #define FDMA_RX_DCB_MAX_DBS		15
-#define FDMA_TX_DCB_MAX_DBS		1
 #define FDMA_XTR_CHANNEL		6
 #define FDMA_INJ_CHANNEL		0
-
-#define FDMA_DCB_INFO_DATAL(x)		((x) & GENMASK(15, 0))
-#define FDMA_DCB_INFO_TOKEN		BIT(17)
-#define FDMA_DCB_INFO_INTR		BIT(18)
-#define FDMA_DCB_INFO_SW(x)		(((x) << 24) & GENMASK(31, 24))
-
-#define FDMA_DCB_STATUS_BLOCKL(x)	((x) & GENMASK(15, 0))
-#define FDMA_DCB_STATUS_SOF		BIT(16)
-#define FDMA_DCB_STATUS_EOF		BIT(17)
-#define FDMA_DCB_STATUS_INTR		BIT(18)
-#define FDMA_DCB_STATUS_DONE		BIT(19)
-#define FDMA_DCB_STATUS_BLOCKO(x)	(((x) << 20) & GENMASK(31, 20))
-#define FDMA_DCB_INVALID_DATA		0x1
 
 #define FDMA_WEIGHT			4
 
@@ -175,23 +161,6 @@ struct sparx5_db {
 	void *cpu_addr;
 };
 
-struct sparx5_db_hw {
-	u64 dataptr;
-	u64 status;
-};
-
-struct sparx5_rx_dcb_hw {
-	u64 nextptr;
-	u64 info;
-	struct sparx5_db_hw db[FDMA_RX_DCB_MAX_DBS];
-};
-
-struct sparx5_tx_dcb_hw {
-	u64 nextptr;
-	u64 info;
-	struct sparx5_db_hw db[FDMA_TX_DCB_MAX_DBS];
-};
-
 /* Frame DMA receive state:
  * For each DB, there is a SKB, and the skb data pointer is mapped in
  * the DB. Once a frame is received the skb is given to the upper layers
@@ -200,13 +169,7 @@ struct sparx5_tx_dcb_hw {
  */
 struct sparx5_rx {
 	struct fdma *fdma;
-	struct sparx5_rx_dcb_hw *dcb_entries;
-	struct sparx5_rx_dcb_hw *last_entry;
-	int db_index;
-	int dcb_index;
-	dma_addr_t dma;
 	struct napi_struct napi;
-	u32 channel_id;
 	struct net_device *ndev;
 	u64 packets;
 	/* For each DB, there is a page */
@@ -225,11 +188,7 @@ struct sparx5_rx {
  */
 struct sparx5_tx {
 	struct fdma *fdma;
-	struct sparx5_tx_dcb_hw *curr_entry;
-	struct sparx5_tx_dcb_hw *first_entry;
 	struct list_head db_list;
-	dma_addr_t dma;
-	u32 channel_id;
 	u64 packets;
 	u64 dropped;
 	u16 max_mtu;
