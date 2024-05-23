@@ -581,10 +581,8 @@ void sparx5_fdma_tx_deactivate(struct sparx5 *sparx5, struct sparx5_tx *tx);
 struct fdma_dcb *sparx5_fdma_next_dcb(struct sparx5_tx *tx,
 				      struct fdma_dcb *dcb);
 void sparx5_fdma_injection_mode(struct sparx5 *sparx5);
-void sparx5_fdma_rx_init(struct sparx5 *sparx5, struct sparx5_rx *rx,
-			 int channel);
-void sparx5_fdma_tx_init(struct sparx5 *sparx5, struct sparx5_tx *tx,
-			 int channel);
+int sparx5_fdma_get_mtu(struct sparx5 *sparx5);
+struct net_device *sparx5_fdma_get_ndev(struct sparx5 *sparx5);
 void sparx5_fdma_reload(struct sparx5 *sparx5, struct fdma *fdma);
 
 /* sparx5_mactable.c */

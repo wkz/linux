@@ -397,6 +397,9 @@ int lan969x_fdma_start(struct sparx5 *sparx5)
 {
 	int err;
 
+	sparx5->tx.max_mtu = sparx5_fdma_get_mtu(sparx5);
+	sparx5->rx.ndev = sparx5_fdma_get_ndev(sparx5);
+
 	/* Reset FDMA state */
 	spx5_wr(FDMA_CTRL_NRESET_SET(0), sparx5, FDMA_CTRL);
 	spx5_wr(FDMA_CTRL_NRESET_SET(1), sparx5, FDMA_CTRL);
@@ -408,8 +411,6 @@ int lan969x_fdma_start(struct sparx5 *sparx5)
 	}
 
 	sparx5_fdma_injection_mode(sparx5);
-	sparx5_fdma_rx_init(sparx5, &sparx5->rx, FDMA_XTR_CHANNEL);
-	sparx5_fdma_tx_init(sparx5, &sparx5->tx, FDMA_INJ_CHANNEL);
 	err = lan969x_fdma_rx_alloc(sparx5, &sparx5->rx);
 	if (err) {
 		dev_err(sparx5->dev, "Could not allocate RX buffers: %d\n", err);

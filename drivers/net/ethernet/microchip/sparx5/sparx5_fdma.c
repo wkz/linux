@@ -20,6 +20,26 @@
 
 #include "fdma_api.h"
 
+struct net_device *sparx5_fdma_get_ndev(struct sparx5 *sparx5)
+{
+	/* Fetch a netdev for SKB and NAPI use, any will do */
+	for (int i = 0; i < sparx5->data->consts.chip_ports; ++i) {
+		struct sparx5_port *port = sparx5->ports[i];
+
+		if (port && port->ndev)
+			return port->ndev;
+	}
+
+	return NULL;
+}
+
+int sparx5_fdma_get_mtu(struct sparx5 *sparx5)
+{
+	struct net_device *ndev = sparx5_fdma_get_ndev(sparx5);
+
+	return ndev->mtu + ETH_ALEN + IFH_LEN * 4 + ETH_FCS_LEN;
+}
+
 static void sparx5_fdma_rx_add_dcb(struct sparx5 *sparx5, struct sparx5_rx *rx,
 				   struct fdma_dcb *dcb, u64 nextptr)
 {
@@ -429,48 +449,6 @@ static int sparx5_fdma_tx_alloc(struct sparx5 *sparx5)
 	return 0;
 }
 
-void sparx5_fdma_rx_init(struct sparx5 *sparx5, struct sparx5_rx *rx,
-			 int channel)
-{
-	const struct sparx5_consts *consts = &sparx5->data->consts;
-	struct fdma *fdma = rx->fdma;
-	int idx;
-
-	fdma->channel_id = channel;
-	/* Fetch a netdev for SKB and NAPI use, any will do */
-	for (idx = 0; idx < consts->chip_ports; ++idx) {
-		struct sparx5_port *port = sparx5->ports[idx];
-
-		if (port && port->ndev) {
-			rx->ndev = port->ndev;
-			break;
-		}
-	}
-}
-EXPORT_SYMBOL_GPL(sparx5_fdma_rx_init);
-
-void sparx5_fdma_tx_init(struct sparx5 *sparx5, struct sparx5_tx *tx,
-			 int channel)
-{
-	const struct sparx5_consts *consts = &sparx5->data->consts;
-	struct fdma *fdma = tx->fdma;
-	int idx;
-
-	fdma->channel_id = channel;
-
-	/* Fetch a netdev for SKB and NAPI use, any will do */
-	for (idx = 0; idx < consts->chip_ports; ++idx) {
-		struct sparx5_port *port = sparx5->ports[idx];
-
-		if (port && port->ndev) {
-			tx->max_mtu = port->ndev->mtu;
-			tx->max_mtu += ETH_ALEN + IFH_LEN * 4 + 4;
-			break;
-		}
-	}
-}
-EXPORT_SYMBOL_GPL(sparx5_fdma_tx_init);
-
 irqreturn_t sparx5_fdma_handler(int irq, void *args)
 {
 	struct sparx5 *sparx5 = args;
@@ -562,6 +540,9 @@ int sparx5_fdma_start(struct sparx5 *sparx5)
 {
 	int err;
 
+	sparx5->tx.max_mtu = sparx5_fdma_get_mtu(sparx5);
+	sparx5->rx.ndev = sparx5_fdma_get_ndev(sparx5);
+
 	/* Reset FDMA state */
 	spx5_wr(FDMA_CTRL_NRESET_SET(0), sparx5, FDMA_CTRL);
 	spx5_wr(FDMA_CTRL_NRESET_SET(1), sparx5, FDMA_CTRL);
@@ -576,8 +557,6 @@ int sparx5_fdma_start(struct sparx5 *sparx5)
 		 sparx5, CPU_PROC_CTRL);
 
 	sparx5_fdma_injection_mode(sparx5);
-	sparx5_fdma_rx_init(sparx5, &sparx5->rx, FDMA_XTR_CHANNEL);
-	sparx5_fdma_tx_init(sparx5, &sparx5->tx, FDMA_INJ_CHANNEL);
 	err = sparx5_fdma_rx_alloc(sparx5);
 	if (err) {
 		dev_err(sparx5->dev, "Could not allocate RX buffers: %d\n", err);
