@@ -462,7 +462,7 @@ int lan969x_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 		sparx5_fdma_tx_activate(sparx5, tx);
 		first_time = false;
 	} else {
-		sparx5_fdma_tx_reload(sparx5, tx);
+		sparx5_fdma_reload(sparx5, fdma);
 	}
 	return NETDEV_TX_OK;
 }
