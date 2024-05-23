@@ -91,8 +91,6 @@ struct fdma {
 
 	/* Virtual addresses */
 	struct fdma_dcb *dcbs;
-	struct fdma_dcb *first_dcb;
-	struct fdma_dcb *curr_dcb;
 	struct fdma_dcb *last_dcb;
 
 	/* DMA address */

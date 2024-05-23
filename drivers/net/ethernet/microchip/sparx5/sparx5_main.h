@@ -159,6 +159,10 @@ struct sparx5;
 struct sparx5_db {
 	struct list_head list;
 	void *cpu_addr;
+	bool used;
+	dma_addr_t dma_addr;
+	int len;
+	struct sk_buff *skb;
 };
 
 /* Frame DMA receive state:
@@ -188,6 +192,7 @@ struct sparx5_rx {
  */
 struct sparx5_tx {
 	struct fdma *fdma;
+	struct sparx5_db *dbs;
 	struct list_head db_list;
 	u64 packets;
 	u64 dropped;
