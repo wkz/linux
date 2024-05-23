@@ -271,22 +271,6 @@ static int sparx5_fdma_napi_callback(struct napi_struct *napi, int weight)
 	return counter;
 }
 
-struct fdma_dcb *sparx5_fdma_next_dcb(struct sparx5_tx *tx,
-				      struct fdma_dcb *dcb)
-{
-	struct fdma *fdma = tx->fdma;
-	struct fdma_dcb *next_dcb;
-
-	next_dcb = dcb;
-	next_dcb++;
-	/* Handle wrap-around */
-	if ((unsigned long)next_dcb >=
-	    ((unsigned long)fdma->first_dcb + fdma->n_dcbs * sizeof(*dcb)))
-		next_dcb = fdma->first_dcb;
-	return next_dcb;
-}
-EXPORT_SYMBOL_GPL(sparx5_fdma_next_dcb);
-
 int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 {
 	struct fdma_dcb *next_dcb_hw;
@@ -296,10 +280,12 @@ int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 	struct fdma_db *db_hw;
 	struct sparx5_db *db;
 
+	fdma_dcb_advance(fdma);
+
 	if (skb_put_padto(skb, ETH_ZLEN))
 		return NETDEV_TX_OK;
 
-	next_dcb_hw = sparx5_fdma_next_dcb(tx, fdma->curr_dcb);
+	next_dcb_hw = fdma_dcb_next_get(fdma);
 	db_hw = &next_dcb_hw->db[0];
 
 	if (!(db_hw->status & FDMA_DCB_STATUS_DONE)) {

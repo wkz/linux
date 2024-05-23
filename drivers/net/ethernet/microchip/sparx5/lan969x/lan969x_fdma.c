@@ -436,7 +436,7 @@ int lan969x_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 	struct fdma_db *db_hw;
 	struct sparx5_db *db;
 
-	next_dcb_hw = sparx5_fdma_next_dcb(tx, fdma->curr_dcb);
+	next_dcb_hw = fdma_dcb_next_get(fdma);
 	db_hw = &next_dcb_hw->db[0];
 
 	dma_sync_single_for_cpu(sparx5->dev, db_hw->dataptr,

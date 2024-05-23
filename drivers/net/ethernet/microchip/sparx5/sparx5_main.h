@@ -578,8 +578,6 @@ void sparx5_fdma_rx_activate(struct sparx5 *sparx5, struct sparx5_rx *rx);
 void sparx5_fdma_rx_deactivate(struct sparx5 *sparx5, struct sparx5_rx *rx);
 void sparx5_fdma_tx_activate(struct sparx5 *sparx5, struct sparx5_tx *tx);
 void sparx5_fdma_tx_deactivate(struct sparx5 *sparx5, struct sparx5_tx *tx);
-struct fdma_dcb *sparx5_fdma_next_dcb(struct sparx5_tx *tx,
-				      struct fdma_dcb *dcb);
 void sparx5_fdma_injection_mode(struct sparx5 *sparx5);
 int sparx5_fdma_get_mtu(struct sparx5 *sparx5);
 struct net_device *sparx5_fdma_get_ndev(struct sparx5 *sparx5);
