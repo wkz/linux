@@ -199,6 +199,7 @@ struct sparx5_tx_dcb_hw {
  * When the db_index reached FDMA_RX_DCB_MAX_DBS the DB is reused.
  */
 struct sparx5_rx {
+	struct fdma *fdma;
 	struct sparx5_rx_dcb_hw *dcb_entries;
 	struct sparx5_rx_dcb_hw *last_entry;
 	int db_index;
@@ -223,6 +224,7 @@ struct sparx5_rx {
  * DCBs are chained using the DCBs nextptr field.
  */
 struct sparx5_tx {
+	struct fdma *fdma;
 	struct sparx5_tx_dcb_hw *curr_entry;
 	struct sparx5_tx_dcb_hw *first_entry;
 	struct list_head db_list;
@@ -619,8 +621,8 @@ void sparx5_fdma_rx_reload(struct sparx5 *sparx5, struct sparx5_rx *rx);
 void sparx5_fdma_tx_activate(struct sparx5 *sparx5, struct sparx5_tx *tx);
 void sparx5_fdma_tx_deactivate(struct sparx5 *sparx5, struct sparx5_tx *tx);
 void sparx5_fdma_tx_reload(struct sparx5 *sparx5, struct sparx5_tx *tx);
-struct sparx5_tx_dcb_hw *sparx5_fdma_next_dcb(struct sparx5_tx *tx,
-					      struct sparx5_tx_dcb_hw *dcb);
+struct fdma_dcb *sparx5_fdma_next_dcb(struct sparx5_tx *tx,
+				      struct fdma_dcb *dcb);
 void sparx5_fdma_injection_mode(struct sparx5 *sparx5);
 void sparx5_fdma_rx_init(struct sparx5 *sparx5, struct sparx5_rx *rx,
 			 int channel);
