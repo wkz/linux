@@ -20,6 +20,12 @@
 
 #include "fdma_api.h"
 
+void sparx5_fdma_llp_configure(struct sparx5 *sparx5, u64 addr, u32 channel_id)
+{
+	spx5_wr(lower_32_bits(addr), sparx5, FDMA_DCB_LLP(channel_id));
+	spx5_wr(upper_32_bits(addr), sparx5, FDMA_DCB_LLP1(channel_id));
+}
+
 struct net_device *sparx5_fdma_get_ndev(struct sparx5 *sparx5)
 {
 	/* Fetch a netdev for SKB and NAPI use, any will do */
@@ -79,11 +85,6 @@ void sparx5_fdma_rx_activate(struct sparx5 *sparx5, struct sparx5_rx *rx)
 {
 	struct fdma *fdma = rx->fdma;
 
-	/* Write the buffer address in the LLP and LLP1 regs */
-	spx5_wr(((u64)fdma->dma) & GENMASK(31, 0), sparx5,
-		FDMA_DCB_LLP(fdma->channel_id));
-	spx5_wr(((u64)fdma->dma) >> 32, sparx5, FDMA_DCB_LLP1(fdma->channel_id));
-
 	/* Set the number of RX DBs to be used, and DB end-of-frame interrupt */
 	spx5_wr(FDMA_CH_CFG_CH_DCB_DB_CNT_SET(fdma->n_dbs) |
 		FDMA_CH_CFG_CH_INTR_DB_EOF_ONLY_SET(1) |
@@ -130,11 +131,6 @@ EXPORT_SYMBOL_GPL(sparx5_fdma_rx_deactivate);
 void sparx5_fdma_tx_activate(struct sparx5 *sparx5, struct sparx5_tx *tx)
 {
 	struct fdma *fdma = tx->fdma;
-
-	/* Write the buffer address in the LLP and LLP1 regs */
-	spx5_wr(((u64)fdma->dma) & GENMASK(31, 0), sparx5,
-		FDMA_DCB_LLP(fdma->channel_id));
-	spx5_wr(((u64)fdma->dma) >> 32, sparx5, FDMA_DCB_LLP1(fdma->channel_id));
 
 	/* Set the number of TX DBs to be used, and DB end-of-frame interrupt */
 	spx5_wr(FDMA_CH_CFG_CH_DCB_DB_CNT_SET(fdma->n_dbs) |
@@ -388,6 +384,7 @@ static int sparx5_fdma_rx_alloc(struct sparx5 *sparx5)
 		sparx5_fdma_rx_add_dcb(sparx5, rx, dcb,
 				       fdma->dma + sizeof(*dcb) * idx);
 	}
+	sparx5_fdma_llp_configure(sparx5, fdma->dma, fdma->channel_id);
 	netif_napi_add_weight(rx->ndev, &rx->napi, sparx5_fdma_napi_callback,
 			      FDMA_WEIGHT);
 	napi_enable(&rx->napi);
@@ -441,6 +438,7 @@ static int sparx5_fdma_tx_alloc(struct sparx5 *sparx5)
 		if (idx == fdma->n_dcbs - 1)
 			fdma->curr_dcb = dcb;
 	}
+	sparx5_fdma_llp_configure(sparx5, fdma->dma, fdma->channel_id);
 	return 0;
 }
 

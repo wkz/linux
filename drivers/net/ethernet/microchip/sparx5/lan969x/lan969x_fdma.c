@@ -296,6 +296,7 @@ static int lan969x_fdma_rx_alloc(struct sparx5 *sparx5, struct sparx5_rx *rx)
 					fdma->dma + sizeof(*dcb) * i);
 	}
 
+	sparx5_fdma_llp_configure(sparx5, fdma->dma, fdma->channel_id);
 	netif_napi_add_weight(rx->ndev, &rx->napi, lan969x_fdma_napi_poll,
 			      FDMA_WEIGHT);
 	napi_enable(&rx->napi);
@@ -371,6 +372,7 @@ static int lan969x_fdma_tx_alloc(struct sparx5 *sparx5)
 		if (idx == fdma->n_dcbs - 1)
 			fdma->curr_dcb = dcb;
 	}
+	sparx5_fdma_llp_configure(sparx5, fdma->dma, fdma->channel_id);
 	return 0;
 }
 

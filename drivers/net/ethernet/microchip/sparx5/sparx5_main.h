@@ -584,6 +584,7 @@ void sparx5_fdma_injection_mode(struct sparx5 *sparx5);
 int sparx5_fdma_get_mtu(struct sparx5 *sparx5);
 struct net_device *sparx5_fdma_get_ndev(struct sparx5 *sparx5);
 void sparx5_fdma_reload(struct sparx5 *sparx5, struct fdma *fdma);
+void sparx5_fdma_llp_configure(struct sparx5 *sparx5, u64 addr, u32 channel_id);
 
 /* sparx5_mactable.c */
 void sparx5_mact_pull_work(struct work_struct *work);
