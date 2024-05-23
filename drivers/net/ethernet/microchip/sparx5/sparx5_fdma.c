@@ -20,6 +20,21 @@
 
 #include "fdma_api.h"
 
+static void *sparx5_fdma_virt_get(struct fdma *fdma, int dcb, int db)
+{
+	return (u8 *)fdma->dcbs + (sizeof(struct fdma_dcb) * fdma->n_dcbs) +
+		   ((dcb * fdma->n_dbs + db) * fdma->db_size);
+}
+
+static int sparx5_fdma_tx_dataptr_cb(struct fdma *fdma, int dcb, int db,
+				     u64 *dataptr)
+{
+	*dataptr = fdma->dma + (sizeof(struct fdma_dcb) * fdma->n_dcbs) +
+		   ((dcb * fdma->n_dbs + db) * fdma->db_size);
+
+	return 0;
+}
+
 void sparx5_fdma_llp_configure(struct sparx5 *sparx5, u64 addr, u32 channel_id)
 {
 	spx5_wr(lower_32_bits(addr), sparx5, FDMA_DCB_LLP(channel_id));
@@ -63,22 +78,6 @@ static void sparx5_fdma_rx_add_dcb(struct sparx5 *sparx5, struct sparx5_rx *rx,
 	dcb->info = FDMA_DCB_INFO_DATAL(PAGE_SIZE << rx->page_order);
 	fdma->last_dcb->nextptr = nextptr;
 	fdma->last_dcb = dcb;
-}
-
-static void sparx5_fdma_tx_add_dcb(struct sparx5_tx *tx,
-				   struct fdma_dcb *dcb,
-				   u64 nextptr)
-{
-	int idx = 0;
-
-	/* Reset the status of the DB */
-	for (idx = 0; idx < tx->fdma->n_dbs; ++idx) {
-		struct fdma_db *db = &dcb->db[idx];
-
-		db->status = FDMA_DCB_STATUS_DONE;
-	}
-	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = FDMA_DCB_INFO_DATAL(tx->max_mtu);
 }
 
 void sparx5_fdma_rx_activate(struct sparx5 *sparx5, struct sparx5_rx *rx)
@@ -273,52 +272,30 @@ static int sparx5_fdma_napi_callback(struct napi_struct *napi, int weight)
 
 int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 {
-	struct fdma_dcb *next_dcb_hw;
 	struct sparx5_tx *tx = &sparx5->tx;
 	static bool first_time = true;
 	struct fdma *fdma = tx->fdma;
-	struct fdma_db *db_hw;
-	struct sparx5_db *db;
+	void *virt_addr;
 
 	fdma_dcb_advance(fdma);
 
 	if (skb_put_padto(skb, ETH_ZLEN))
 		return NETDEV_TX_OK;
 
-	next_dcb_hw = fdma_dcb_next_get(fdma);
-	db_hw = &next_dcb_hw->db[0];
+	if (!fdma_db_is_done(fdma_db_get(fdma, fdma->dcb_index, 0)))
+		return NETDEV_TX_BUSY;
 
-	if (!(db_hw->status & FDMA_DCB_STATUS_DONE)) {
-		while (true) {
-			next_dcb_hw++;
-			if ((unsigned long)next_dcb_hw >= ((unsigned long)fdma->first_dcb +
-							   fdma->n_dcbs * sizeof(*next_dcb_hw)))
-				next_dcb_hw = fdma->first_dcb;
+	virt_addr = sparx5_fdma_virt_get(fdma, fdma->dcb_index, 0);
 
-			/* Skip the unfinished db */
-			db = list_first_entry(&tx->db_list, struct sparx5_db, list);
-			list_move_tail(&db->list, &tx->db_list);
+	memcpy(virt_addr, ifh, IFH_LEN * 4);
+	memcpy(virt_addr + IFH_LEN * 4, skb->data, skb->len);
 
-			db_hw = &next_dcb_hw->db[0];
-			if (db_hw->status & FDMA_DCB_STATUS_DONE)
-				break;
-		}
-	}
+	fdma_dcb_add(fdma, fdma->dcb_index, 0,
+		     FDMA_DCB_STATUS_SOF |
+		     FDMA_DCB_STATUS_EOF |
+		     FDMA_DCB_STATUS_BLOCKO(0) |
+		     FDMA_DCB_STATUS_BLOCKL(skb->len + IFH_LEN * 4 + 4));
 
-	db = list_first_entry(&tx->db_list, struct sparx5_db, list);
-	list_move_tail(&db->list, &tx->db_list);
-	next_dcb_hw->nextptr = FDMA_DCB_INVALID_DATA;
-	fdma->curr_dcb->nextptr = fdma->dma +
-		((unsigned long)next_dcb_hw -
-		 (unsigned long)fdma->first_dcb);
-	fdma->curr_dcb = next_dcb_hw;
-	memset(db->cpu_addr, 0, skb->len);
-	memcpy(db->cpu_addr, ifh, IFH_LEN * 4);
-	memcpy(db->cpu_addr + IFH_LEN * 4, skb->data, skb->len);
-	db_hw->status = FDMA_DCB_STATUS_SOF |
-			FDMA_DCB_STATUS_EOF |
-			FDMA_DCB_STATUS_BLOCKO(0) |
-			FDMA_DCB_STATUS_BLOCKL(skb->len + IFH_LEN * 4 + 4);
 	if (first_time) {
 		sparx5_fdma_tx_activate(sparx5, tx);
 		first_time = false;
@@ -383,51 +360,19 @@ static int sparx5_fdma_rx_alloc(struct sparx5 *sparx5)
 
 static int sparx5_fdma_tx_alloc(struct sparx5 *sparx5)
 {
-	struct sparx5_tx *tx = &sparx5->tx;
-	struct fdma *fdma = tx->fdma;
-	struct fdma_dcb *dcb;
-	int idx, jdx;
-	int size;
+	struct fdma *fdma = sparx5->tx.fdma;
+	int err;
 
-	size = sizeof(struct fdma_dcb) * fdma->n_dcbs;
-	size = ALIGN(size, PAGE_SIZE);
-	fdma->curr_dcb = devm_kzalloc(sparx5->dev, size, GFP_KERNEL);
-	if (!fdma->curr_dcb)
-		return -ENOMEM;
-	fdma->dma = virt_to_phys(fdma->curr_dcb);
-	fdma->first_dcb = fdma->curr_dcb;
-	INIT_LIST_HEAD(&tx->db_list);
-	/* Now for each dcb allocate the db */
-	for (idx = 0; idx < fdma->n_dcbs; ++idx) {
-		dcb = &fdma->curr_dcb[idx];
-		dcb->info = 0;
-		/* TX databuffers must be 16byte aligned */
-		for (jdx = 0; jdx < fdma->n_dbs; ++jdx) {
-			struct fdma_db *db_hw = &dcb->db[jdx];
-			struct sparx5_db *db;
-			dma_addr_t phys;
-			void *cpu_addr;
+	err = fdma_alloc_phys(fdma);
+	if (err)
+		return err;
 
-			cpu_addr = devm_kzalloc(sparx5->dev,
-						tx->max_mtu,
-						GFP_KERNEL);
-			if (!cpu_addr)
-				return -ENOMEM;
-			phys = virt_to_phys(cpu_addr);
-			db_hw->dataptr = phys;
-			db_hw->status = 0;
-			db = devm_kzalloc(sparx5->dev, sizeof(*db), GFP_KERNEL);
-			if (!db)
-				return -ENOMEM;
-			db->cpu_addr = cpu_addr;
-			list_add_tail(&db->list, &tx->db_list);
-		}
-		sparx5_fdma_tx_add_dcb(tx, dcb, fdma->dma + sizeof(*dcb) * idx);
-		/* Let the curr_entry to point to the last allocated entry */
-		if (idx == fdma->n_dcbs - 1)
-			fdma->curr_dcb = dcb;
-	}
+	fdma_dcbs_init(fdma,
+		       FDMA_DCB_INFO_DATAL(fdma->db_size),
+		       FDMA_DCB_STATUS_DONE);
+
 	sparx5_fdma_llp_configure(sparx5, fdma->dma, fdma->channel_id);
+
 	return 0;
 }
 
@@ -518,12 +463,27 @@ void sparx5_fdma_injection_mode(struct sparx5 *sparx5)
 }
 EXPORT_SYMBOL_GPL(sparx5_fdma_injection_mode);
 
+static struct fdma sparx5_fdma_tx = {
+	.channel_id = FDMA_INJ_CHANNEL,
+	.n_dcbs = 64,
+	.n_dbs = 1,
+	.ops = {
+		.dataptr_cb = &sparx5_fdma_tx_dataptr_cb,
+		.nextptr_cb = &fdma_nextptr_cb,
+	},
+};
+
 int sparx5_fdma_start(struct sparx5 *sparx5)
 {
 	int err;
 
 	sparx5->tx.max_mtu = sparx5_fdma_get_mtu(sparx5);
 	sparx5->rx.ndev = sparx5_fdma_get_ndev(sparx5);
+
+	sparx5->tx.fdma = &sparx5_fdma_tx;
+	sparx5->tx.fdma->priv = sparx5;
+	sparx5->tx.fdma->db_size = ALIGN(sparx5->tx.max_mtu, PAGE_SIZE);
+	sparx5->tx.fdma->size = fdma_get_size_contiguous(sparx5->tx.fdma);
 
 	/* Reset FDMA state */
 	spx5_wr(FDMA_CTRL_NRESET_SET(0), sparx5, FDMA_CTRL);
@@ -570,5 +530,6 @@ int sparx5_fdma_stop(struct sparx5 *sparx5)
 	read_poll_timeout(sparx5_fdma_port_ctrl, val,
 			  FDMA_PORT_CTRL_XTR_BUF_IS_EMPTY_GET(val) == 0,
 			  500, 10000, 0, sparx5);
+	fdma_free_phys(sparx5->tx.fdma);
 	return 0;
 }
