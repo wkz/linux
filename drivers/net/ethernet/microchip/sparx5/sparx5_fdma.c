@@ -20,37 +20,6 @@
 
 #include "fdma_api.h"
 
-/* Frame DMA DCB format
- *
- * +---------------------------+
- * |         Next Ptr          |
- * +---------------------------+
- * |   Reserved  |    Info     |
- * +---------------------------+
- * |         Data0 Ptr         |
- * +---------------------------+
- * |   Reserved  |    Status0  |
- * +---------------------------+
- * |         Data1 Ptr         |
- * +---------------------------+
- * |   Reserved  |    Status1  |
- * +---------------------------+
- * |         Data2 Ptr         |
- * +---------------------------+
- * |   Reserved  |    Status2  |
- * |-------------|-------------|
- * |                           |
- * |                           |
- * |                           |
- * |                           |
- * |                           |
- * |---------------------------|
- * |         Data14 Ptr        |
- * +-------------|-------------+
- * |   Reserved  |    Status14 |
- * +-------------|-------------+
- */
-
 static void sparx5_fdma_rx_add_dcb(struct sparx5 *sparx5, struct sparx5_rx *rx,
 				   struct fdma_dcb *dcb, u64 nextptr)
 {
