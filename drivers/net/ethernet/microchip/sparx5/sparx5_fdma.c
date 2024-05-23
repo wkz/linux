@@ -35,6 +35,24 @@ static int sparx5_fdma_tx_dataptr_cb(struct fdma *fdma, int dcb, int db,
 	return 0;
 }
 
+static int sparx5_fdma_rx_dataptr_cb(struct fdma *fdma, int dcb, int db,
+				     u64 *dataptr)
+{
+	struct sparx5 *sparx5 = fdma->priv;
+	struct sparx5_rx *rx = &sparx5->rx;
+	struct sk_buff *skb;
+
+	skb = __netdev_alloc_skb(rx->ndev, fdma->db_size, GFP_ATOMIC);
+	if (unlikely(!skb))
+		return -ENOMEM;
+
+	*dataptr  = virt_to_phys(skb->data);
+
+	rx->skb[dcb][db] = skb;
+
+	return 0;
+}
+
 void sparx5_fdma_llp_configure(struct sparx5 *sparx5, u64 addr, u32 channel_id)
 {
 	spx5_wr(lower_32_bits(addr), sparx5, FDMA_DCB_LLP(channel_id));
@@ -59,25 +77,6 @@ int sparx5_fdma_get_mtu(struct sparx5 *sparx5)
 	struct net_device *ndev = sparx5_fdma_get_ndev(sparx5);
 
 	return ndev->mtu + ETH_ALEN + IFH_LEN * 4 + ETH_FCS_LEN;
-}
-
-static void sparx5_fdma_rx_add_dcb(struct sparx5 *sparx5, struct sparx5_rx *rx,
-				   struct fdma_dcb *dcb, u64 nextptr)
-{
-	const struct sparx5_consts *consts = &sparx5->data->consts;
-	struct fdma *fdma = rx->fdma;
-	int idx = 0;
-
-	/* Reset the status of the DB */
-	for (idx = 0; idx < consts->fdma_db_cnt; ++idx) {
-		struct fdma_db *db = &dcb->db[idx];
-
-		db->status = FDMA_DCB_STATUS_INTR;
-	}
-	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = FDMA_DCB_INFO_DATAL(PAGE_SIZE << rx->page_order);
-	fdma->last_dcb->nextptr = nextptr;
-	fdma->last_dcb = dcb;
 }
 
 void sparx5_fdma_rx_activate(struct sparx5 *sparx5, struct sparx5_rx *rx)
@@ -161,35 +160,19 @@ void sparx5_fdma_reload(struct sparx5 *sparx5, struct fdma *fdma)
 }
 EXPORT_SYMBOL_GPL(sparx5_fdma_reload);
 
-static struct sk_buff *sparx5_fdma_rx_alloc_skb(struct sparx5_rx *rx)
-{
-	return __netdev_alloc_skb(rx->ndev, PAGE_SIZE << rx->page_order,
-				  GFP_ATOMIC);
-}
-
 static bool sparx5_fdma_rx_get_frame(struct sparx5 *sparx5, struct sparx5_rx *rx)
 {
 	const struct sparx5_consts *consts = &sparx5->data->consts;
 	struct fdma *fdma = rx->fdma;
 	struct fdma_db *db_hw;
 	struct sparx5_port *port;
-	struct sk_buff *new_skb;
 	struct frame_info fi;
 	struct sk_buff *skb;
-	dma_addr_t dma_addr;
 
 	db_hw = fdma_db_next_get(fdma);
 	if (unlikely(!fdma_db_is_done(db_hw)))
 		return false;
 	skb = rx->skb[fdma->dcb_index][fdma->db_index];
-	/* Replace the DB entry with a new SKB */
-	new_skb = sparx5_fdma_rx_alloc_skb(rx);
-	if (unlikely(!new_skb))
-		return false;
-	/* Map the new skb data and set the new skb */
-	dma_addr = virt_to_phys(new_skb->data);
-	rx->skb[fdma->dcb_index][fdma->db_index] = new_skb;
-	db_hw->dataptr = dma_addr;
 	skb_put(skb, fdma_db_len_get(db_hw));
 	/* Now do the normal processing of the skb */
 	sparx5_ifh_parse(sparx5, (u32 *)skb->data, &fi);
@@ -243,21 +226,16 @@ static int sparx5_fdma_napi_callback(struct napi_struct *napi, int weight)
 	int counter = 0;
 
 	while (counter < weight && sparx5_fdma_rx_get_frame(sparx5, rx)) {
-		struct fdma_dcb *old_dcb;
-
 		fdma_db_advance(fdma);
 		counter++;
 		if (fdma_dcb_is_reusable(fdma))
 			continue;
-		/* As the DCB  can be reused, just advance the dcb_index
-		 * pointer and set the nextptr in the DCB
-		 */
+
+		fdma_dcb_add(fdma, fdma->dcb_index,
+			     FDMA_DCB_INFO_DATAL(fdma->db_size),
+			     FDMA_DCB_STATUS_INTR);
 		fdma_db_reset(fdma);
-		old_dcb = &fdma->dcbs[fdma->dcb_index];
 		fdma_dcb_advance(fdma);
-		sparx5_fdma_rx_add_dcb(sparx5, rx, old_dcb, fdma->dma +
-				       ((unsigned long)old_dcb -
-					(unsigned long)fdma->dcbs));
 	}
 	if (counter < weight) {
 		napi_complete_done(&rx->napi, counter);
@@ -310,48 +288,23 @@ int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 
 static int sparx5_fdma_rx_alloc(struct sparx5 *sparx5)
 {
-	const struct sparx5_consts *consts = &sparx5->data->consts;
 	struct sparx5_rx *rx = &sparx5->rx;
 	struct fdma *fdma = rx->fdma;
-	struct fdma_dcb *dcb;
-	int idx, jdx;
-	int size;
+	int err;
 
-	size = sizeof(struct fdma_dcb) * fdma->n_dcbs;
-	size = ALIGN(size, PAGE_SIZE);
-	fdma->dcbs = devm_kzalloc(sparx5->dev, size, GFP_KERNEL);
-	if (!fdma->dcbs)
-		return -ENOMEM;
-	fdma->dma = virt_to_phys(fdma->dcbs);
-	fdma->last_dcb = fdma->dcbs;
-	fdma->db_index = 0;
-	fdma->dcb_index = 0;
-	/* Now for each dcb allocate the db */
-	for (idx = 0; idx < fdma->n_dcbs; ++idx) {
-		dcb = &fdma->dcbs[idx];
-		dcb->info = 0;
-		/* For each db allocate an skb and map skb data pointer to the DB
-		 * dataptr. In this way when the frame is received the skb->data
-		 * will contain the frame, so no memcpy is needed
-		 */
-		for (jdx = 0; jdx < consts->fdma_db_cnt; ++jdx) {
-			struct fdma_db *db_hw = &dcb->db[jdx];
-			dma_addr_t dma_addr;
-			struct sk_buff *skb;
+	err = fdma_alloc_phys(fdma);
+	if (err)
+		return err;
 
-			skb = sparx5_fdma_rx_alloc_skb(rx);
-			if (!skb)
-				return -ENOMEM;
-			dma_addr = virt_to_phys(skb->data);
-			db_hw->dataptr = dma_addr;
-			db_hw->status = 0;
-			rx->skb[idx][jdx] = skb;
-		}
-		sparx5_fdma_rx_add_dcb(sparx5, rx, dcb,
-				       fdma->dma + sizeof(*dcb) * idx);
-	}
+	fdma_dcbs_init(fdma,
+		       FDMA_DCB_INFO_DATAL(fdma->db_size),
+		       FDMA_DCB_STATUS_INTR);
+
 	sparx5_fdma_llp_configure(sparx5, fdma->dma, fdma->channel_id);
-	netif_napi_add_weight(rx->ndev, &rx->napi, sparx5_fdma_napi_callback,
+
+	netif_napi_add_weight(rx->ndev,
+			      &rx->napi,
+			      sparx5_fdma_napi_callback,
 			      FDMA_WEIGHT);
 	napi_enable(&rx->napi);
 	sparx5_fdma_rx_activate(sparx5, rx);
@@ -473,6 +426,16 @@ static struct fdma sparx5_fdma_tx = {
 	},
 };
 
+static struct fdma sparx5_fdma_rx = {
+	.channel_id = FDMA_XTR_CHANNEL,
+	.n_dcbs = 64,
+	.n_dbs = 15,
+	.ops = {
+		.dataptr_cb = &sparx5_fdma_rx_dataptr_cb,
+		.nextptr_cb = &fdma_nextptr_cb,
+	},
+};
+
 int sparx5_fdma_start(struct sparx5 *sparx5)
 {
 	int err;
@@ -484,6 +447,10 @@ int sparx5_fdma_start(struct sparx5 *sparx5)
 	sparx5->tx.fdma->priv = sparx5;
 	sparx5->tx.fdma->db_size = ALIGN(sparx5->tx.max_mtu, PAGE_SIZE);
 	sparx5->tx.fdma->size = fdma_get_size_contiguous(sparx5->tx.fdma);
+	sparx5->rx.fdma = &sparx5_fdma_rx;
+	sparx5->rx.fdma->priv = sparx5;
+	sparx5->rx.fdma->db_size = ALIGN(sparx5->tx.max_mtu, PAGE_SIZE);
+	sparx5->rx.fdma->size = fdma_get_size_contiguous(sparx5->rx.fdma);
 
 	/* Reset FDMA state */
 	spx5_wr(FDMA_CTRL_NRESET_SET(0), sparx5, FDMA_CTRL);
@@ -531,5 +498,6 @@ int sparx5_fdma_stop(struct sparx5 *sparx5)
 			  FDMA_PORT_CTRL_XTR_BUF_IS_EMPTY_GET(val) == 0,
 			  500, 10000, 0, sparx5);
 	fdma_free_phys(sparx5->tx.fdma);
+	fdma_free_phys(sparx5->rx.fdma);
 	return 0;
 }
