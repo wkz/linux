@@ -339,6 +339,9 @@ int sparx5_fdma_xmit(struct sparx5 *sparx5, u32 *ifh, struct sk_buff *skb)
 	} else {
 		sparx5_fdma_reload(sparx5, fdma);
 	}
+
+	sparx5_consume_skb(skb);
+
 	return NETDEV_TX_OK;
 }
 

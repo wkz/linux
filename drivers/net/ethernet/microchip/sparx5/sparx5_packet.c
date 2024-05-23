@@ -262,6 +262,8 @@ static int sparx5_inject(struct sparx5 *sparx5,
 			      HRTIMER_MODE_REL);
 	}
 
+	sparx5_consume_skb(skb);
+
 	return NETDEV_TX_OK;
 }
 
@@ -316,11 +318,6 @@ netdev_tx_t sparx5_port_xmit_impl(struct sk_buff *skb, struct net_device *dev)
 	stats->tx_packets++;
 	sparx5->tx.packets++;
 
-	if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP &&
-	    SPARX5_SKB_CB(skb)->rew_op == IFH_REW_OP_TWO_STEP_PTP)
-		return NETDEV_TX_OK;
-
-	dev_consume_skb_any(skb);
 	return NETDEV_TX_OK;
 drop:
 	stats->tx_dropped++;
@@ -415,4 +412,16 @@ void sparx5_port_inj_timer_setup(struct sparx5_port *port)
 {
 	hrtimer_init(&port->inj_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	port->inj_timer.function = sparx5_injection_timeout;
+}
+
+void sparx5_consume_skb(struct sk_buff *skb)
+{
+	bool ptp = false;
+
+	if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP &&
+	    SPARX5_SKB_CB(skb)->rew_op == IFH_REW_OP_TWO_STEP_PTP)
+		ptp = true;
+
+	if (!ptp)
+		dev_consume_skb_any(skb);
 }

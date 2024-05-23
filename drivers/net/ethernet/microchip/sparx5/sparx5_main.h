@@ -945,6 +945,7 @@ void sparx5_update_u64_counter(u64 *cntr, u32 msb, u32 lsb);
 
 /* sparx5_packet.c */
 u32 sparx5_get_packet_pipeline_pt(enum sparx5_packet_pipeline_pt pt);
+void sparx5_consume_skb(struct sk_buff *skb);
 
 /* Clock period in picoseconds */
 static inline u32 sparx5_clk_period(enum sparx5_core_clockfreq cclock)
