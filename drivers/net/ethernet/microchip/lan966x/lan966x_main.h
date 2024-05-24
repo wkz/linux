@@ -30,7 +30,7 @@
 #include <vcap_api.h>
 #include <vcap_api_client.h>
 
-#include "fdma_pci.h"
+#include <fdma_api.h>
 
 #define TABLE_UPDATE_SLEEP_US		10
 #define TABLE_UPDATE_TIMEOUT_US		100000
@@ -263,6 +263,8 @@ struct lan966x_tx_dcb {
 struct lan966x_rx {
 	struct lan966x *lan966x;
 
+	struct fdma *fdma;
+
 	/* Pointer to the array of hardware dcbs. */
 	struct lan966x_rx_dcb *dcbs;
 
@@ -322,6 +324,8 @@ struct lan966x_tx_dcb_buf {
 
 struct lan966x_tx {
 	struct lan966x *lan966x;
+
+	struct fdma *fdma;
 
 	/* Pointer to the dcb list */
 	struct lan966x_tx_dcb *dcbs;
@@ -845,7 +849,7 @@ int lan966x_fdma_get_max_frame(struct lan966x *lan966x);
 void lan966x_fdma_rx_start(struct lan966x_rx *rx);
 void lan966x_fdma_rx_disable(struct lan966x_rx *rx);
 void lan966x_fdma_tx_disable(struct lan966x_tx *tx);
-void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx, struct lan966x_tx_dcb *dcb);
+void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx, struct fdma_dcb *dcb);
 int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx);
 void lan966x_fdma_llp_configure(struct lan966x *lan966x, u64 addr,
 				u8 channel_id);
