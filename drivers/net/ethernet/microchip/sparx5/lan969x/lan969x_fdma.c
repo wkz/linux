@@ -85,55 +85,6 @@ static void lan969x_fdma_tx_clear_buf(struct sparx5 *sparx5, int weight)
 	spin_unlock_irqrestore(&sparx5->tx_lock, flags);
 }
 
-static struct page *lan969x_fdma_rx_alloc_page(struct sparx5 *sparx5,
-					       struct sparx5_rx *rx,
-					       struct fdma_db *db)
-{
-	dma_addr_t dma_addr;
-	struct page *page;
-
-	page = dev_alloc_pages(rx->page_order);
-	if (unlikely(!page))
-		return NULL;
-
-	dma_addr = dma_map_page(sparx5->dev, page, 0,
-				PAGE_SIZE << rx->page_order,
-				DMA_FROM_DEVICE);
-	if (unlikely(dma_mapping_error(sparx5->dev, dma_addr)))
-		goto free_page;
-
-	db->dataptr = dma_addr;
-
-	return page;
-
-free_page:
-	__free_pages(page, rx->page_order);
-	return NULL;
-}
-
-static void lan969x_fdma_rx_free_pages(struct sparx5 *sparx5,
-				       struct sparx5_rx *rx)
-{
-	const struct sparx5_consts *consts = &sparx5->data->consts;
-	struct fdma *fdma = rx->fdma;
-	struct fdma_dcb *dcb;
-	struct fdma_db *db;
-	int i, j;
-
-	for (i = 0; i < fdma->n_dcbs; ++i) {
-		dcb = &fdma->dcbs[i];
-
-		for (j = 0; j < consts->fdma_db_cnt; ++j) {
-			db = &dcb->db[j];
-			dma_unmap_single(sparx5->dev,
-					 (dma_addr_t)db->dataptr,
-					 PAGE_SIZE << rx->page_order,
-					 DMA_FROM_DEVICE);
-			__free_pages(rx->page[i][j], rx->page_order);
-		}
-	}
-}
-
 static void lan969x_fdma_free_pages(struct sparx5_rx *rx)
 {
 	struct fdma *fdma = rx->fdma;
@@ -144,45 +95,6 @@ static void lan969x_fdma_free_pages(struct sparx5_rx *rx)
 			page_pool_put_full_page(rx->page_pool,
 						rx->page[i][j], false);
 	}
-}
-
-static void lan969x_fdma_rx_add_dcb(struct sparx5 *sparx5, struct sparx5_rx *rx,
-				    struct fdma_dcb *dcb, u64 nextptr)
-{
-	const struct sparx5_consts *consts = &sparx5->data->consts;
-	struct fdma *fdma = rx->fdma;
-	struct fdma_db *db;
-	int i;
-
-	for (i = 0; i < consts->fdma_db_cnt; ++i) {
-		db = &dcb->db[i];
-		db->status = FDMA_DCB_STATUS_INTR;
-	}
-
-	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = FDMA_DCB_INFO_DATAL(PAGE_SIZE << rx->page_order);
-
-	fdma->last_dcb->nextptr = nextptr;
-	fdma->last_dcb = dcb;
-}
-
-static bool lan969x_fdma_rx_more_frames(struct sparx5_rx *rx)
-{
-	struct fdma *fdma = rx->fdma;
-	struct fdma_db *db;
-
-	/* Check if there is any data */
-	db = &fdma->dcbs[fdma->dcb_index].db[fdma->db_index];
-	if (unlikely(!(db->status & FDMA_DCB_STATUS_DONE)))
-		return false;
-
-	return true;
-}
-
-static void lan969x_fdma_rx_reload(struct sparx5 *sparx5, struct sparx5_rx *rx)
-{
-	/* Reload the RX channel */
-	spx5_wr(BIT(rx->fdma->channel_id), sparx5, FDMA_CH_RELOAD);
 }
 
 static struct sk_buff *lan969x_fdma_rx_get_frame(struct sparx5 *sparx5,
