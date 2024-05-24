@@ -7,16 +7,16 @@
  * https://github.com/microchip-ung/sparx-5_reginfo
  */
 
-#include <linux/types.h>
-#include <linux/skbuff.h>
-#include <linux/netdevice.h>
+#include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/ip.h>
-#include <linux/dma-mapping.h>
+#include <linux/netdevice.h>
+#include <linux/skbuff.h>
+#include <linux/types.h>
 #include <net/page_pool/helpers.h>
 
-#include "../sparx5_main_regs.h"
 #include "../sparx5_main.h"
+#include "../sparx5_main_regs.h"
 #include "../sparx5_port.h"
 
 #include "fdma_api.h"
@@ -289,6 +289,7 @@ int lan969x_fdma_stop(struct sparx5 *sparx5)
 {
 	u32 val;
 
+	napi_synchronize(&sparx5->rx.napi);
 	napi_disable(&sparx5->rx.napi);
 	/* Stop the fdma and channel interrupts */
 	sparx5_fdma_rx_deactivate(sparx5, &sparx5->rx);
@@ -362,7 +363,6 @@ int lan969x_fdma_start(struct sparx5 *sparx5)
 
 	err = lan969x_fdma_tx_alloc(sparx5);
 	if (err) {
-		pr_info("%s:%u", __func__, __LINE__);
 		dev_err(sparx5->dev, "Could not allocate TX buffers: %d\n", err);
 		return err;
 	}
