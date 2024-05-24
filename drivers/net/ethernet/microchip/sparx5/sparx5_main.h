@@ -160,6 +160,7 @@ struct sparx5_db {
 	struct list_head list;
 	void *cpu_addr;
 	bool used;
+	bool ptp;
 	dma_addr_t dma_addr;
 	int len;
 	struct sk_buff *skb;
@@ -173,6 +174,7 @@ struct sparx5_db {
  */
 struct sparx5_rx {
 	struct fdma *fdma;
+	struct page_pool *page_pool;
 	struct napi_struct napi;
 	struct net_device *ndev;
 	u64 packets;
