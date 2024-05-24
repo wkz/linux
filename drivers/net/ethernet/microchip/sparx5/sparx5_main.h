@@ -23,6 +23,8 @@
 #include "sparx5_main_regs.h"
 #include "sparx5_vcap_impl.h"
 
+#include "fdma_api.h"
+
 /* Target chip type */
 enum spx5_target_chiptype {
 	SPX5_TARGET_CT_7546       = 0x7546,  /* SparX-5-64  Enterprise */
@@ -404,6 +406,10 @@ struct sparx5 {
 	bool is_pcie_device;
 	/* L3 Forwarding */
 	struct sparx5_router *router;
+#ifdef CONFIG_MFD_LAN969X_PCI
+	/* fdma pci */
+	struct fdma_pci_atu atu;
+#endif
 };
 
 struct sparx5_calendar_data {

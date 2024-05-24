@@ -57,6 +57,7 @@ enum sparx5_target {
 	TARGET_XQS = 331,
 	TARGET_DEVRGMII = 392,
 	TARGET_GPV = 403,
+	TARGET_PCIE_DBI = 417,
 	NUM_TARGETS = 517
 };
 
