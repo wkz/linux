@@ -788,14 +788,11 @@ void lan966x_fdma_deinit(struct lan966x *lan966x);
 irqreturn_t lan966x_fdma_irq_handler(int irq, void *args);
 int lan966x_fdma_reload_page_pool(struct lan966x *lan966x);
 void lan966x_fdma_wakeup_netdev(struct lan966x *lan966x);
-bool lan966x_fdma_rx_more_frames(struct lan966x_rx *rx);
-void lan966x_fdma_rx_advance_dcb(struct lan966x_rx *rx);
 void lan966x_fdma_rx_reload(struct lan966x_rx *rx);
 int lan966x_fdma_get_max_frame(struct lan966x *lan966x);
 void lan966x_fdma_rx_start(struct lan966x_rx *rx);
 void lan966x_fdma_rx_disable(struct lan966x_rx *rx);
 void lan966x_fdma_tx_disable(struct lan966x_tx *tx);
-void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx, struct fdma_dcb *dcb);
 int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx);
 void lan966x_fdma_llp_configure(struct lan966x *lan966x, u64 addr,
 				u8 channel_id);

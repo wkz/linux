@@ -55,20 +55,6 @@ static int lan966x_fdma_channel_active(struct lan966x *lan966x)
 	return lan_rd(lan966x, FDMA_CH_ACTIVE);
 }
 
-static struct page *lan966x_fdma_rx_alloc_page(struct lan966x_rx *rx,
-					       struct fdma_db *db)
-{
-	struct page *page;
-
-	page = page_pool_dev_alloc_pages(rx->page_pool);
-	if (unlikely(!page))
-		return NULL;
-
-	db->dataptr = page_pool_get_dma_addr(page) + XDP_PACKET_HEADROOM;
-
-	return page;
-}
-
 static void lan966x_fdma_rx_free_pages(struct lan966x_rx *rx)
 {
 	struct fdma *fdma = rx->fdma;
@@ -91,26 +77,6 @@ static void lan966x_fdma_rx_free_page(struct lan966x_rx *rx)
 		return;
 
 	page_pool_recycle_direct(rx->page_pool, page);
-}
-
-static void lan966x_fdma_rx_add_dcb(struct lan966x_rx *rx,
-				    struct fdma_dcb *dcb,
-				    u64 nextptr)
-{
-	struct fdma *fdma = rx->fdma;
-	struct fdma_db *db;
-	int i;
-
-	for (i = 0; i < fdma->n_dbs; ++i) {
-		db = &dcb->db[i];
-		db->status = FDMA_DCB_STATUS_INTR;
-	}
-
-	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = FDMA_DCB_INFO_DATAL(PAGE_SIZE << rx->page_order);
-
-	fdma->last_dcb->nextptr = nextptr;
-	fdma->last_dcb = dcb;
 }
 
 static int lan966x_fdma_rx_alloc_page_pool(struct lan966x_rx *rx)
@@ -168,26 +134,6 @@ static int lan966x_fdma_rx_alloc(struct lan966x_rx *rx)
 	lan966x_fdma_llp_configure(lan966x, fdma->dma, fdma->channel_id);
 
 	return 0;
-}
-
-void lan966x_fdma_rx_advance_dcb(struct lan966x_rx *rx)
-{
-	struct fdma *fdma = rx->fdma;
-
-	fdma->dcb_index++;
-	fdma->dcb_index &= rx->fdma->n_dcbs - 1;
-}
-
-static void lan966x_fdma_rx_free(struct lan966x_rx *rx)
-{
-	struct lan966x *lan966x = rx->lan966x;
-	struct fdma *fdma = rx->fdma;
-	u32 size;
-
-	/* Now it is possible to do the cleanup of dcb */
-	size = sizeof(struct fdma_dcb) * fdma->n_dcbs;
-	size = ALIGN(size, PAGE_SIZE);
-	dma_free_coherent(lan966x->dev, size, fdma->dcbs, fdma->dma);
 }
 
 void lan966x_fdma_rx_start(struct lan966x_rx *rx)
@@ -248,13 +194,6 @@ void lan966x_fdma_rx_reload(struct lan966x_rx *rx)
 	lan_rmw(FDMA_CH_RELOAD_CH_RELOAD_SET(BIT(rx->fdma->channel_id)),
 		FDMA_CH_RELOAD_CH_RELOAD,
 		lan966x, FDMA_CH_RELOAD);
-}
-
-void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx,
-			     struct fdma_dcb *dcb)
-{
-	dcb->nextptr = FDMA_DCB_INVALID_DATA;
-	dcb->info = 0;
 }
 
 static int lan966x_fdma_tx_alloc(struct lan966x_tx *tx)
@@ -444,19 +383,6 @@ static void lan966x_fdma_tx_clear_buf(struct lan966x *lan966x, int weight)
 		lan966x_fdma_wakeup_netdev(lan966x);
 
 	spin_unlock_irqrestore(&lan966x->tx_lock, flags);
-}
-
-bool lan966x_fdma_rx_more_frames(struct lan966x_rx *rx)
-{
-	struct fdma *fdma = rx->fdma;
-	struct fdma_db *db;
-
-	/* Check if there is any data */
-	db = &fdma->dcbs[fdma->dcb_index].db[fdma->db_index];
-	if (unlikely(!(db->status & FDMA_DCB_STATUS_DONE)))
-		return false;
-
-	return true;
 }
 
 static int lan966x_fdma_rx_check_frame(struct lan966x_rx *rx, u64 *src_port)
@@ -654,25 +580,6 @@ int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx)
 	}
 
 	return -1;
-}
-
-static void lan966x_fdma_tx_setup_dcb(struct lan966x_tx *tx,
-				      int next_to_use, int len,
-				      dma_addr_t dma_addr)
-{
-	struct fdma_dcb *next_dcb;
-	struct fdma_db *next_db;
-
-	next_dcb = &tx->fdma->dcbs[next_to_use];
-	next_dcb->nextptr = FDMA_DCB_INVALID_DATA;
-
-	next_db = &next_dcb->db[0];
-	next_db->dataptr = dma_addr;
-	next_db->status = FDMA_DCB_STATUS_SOF |
-			  FDMA_DCB_STATUS_EOF |
-			  FDMA_DCB_STATUS_INTR |
-			  FDMA_DCB_STATUS_BLOCKO(0) |
-			  FDMA_DCB_STATUS_BLOCKL(len);
 }
 
 static void lan966x_fdma_tx_start(struct lan966x_tx *tx)
