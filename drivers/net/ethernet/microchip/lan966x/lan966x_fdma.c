@@ -6,6 +6,26 @@
 
 #include "lan966x_main.h"
 
+static inline int lan966x_fdma_tx_dataptr_cb(struct fdma *fdma, int dcb, int db,
+					     u64 *dataptr)
+{
+	struct lan966x *lan966x = (struct lan966x *)fdma->priv;
+
+	*dataptr = lan966x->tx.dcbs_buf[dcb].dma_addr;
+
+	return 0;
+}
+
+static inline int lan966x_fdma_xdp_tx_dataptr_cb(struct fdma *fdma, int dcb,
+						 int db, u64 *dataptr)
+{
+	struct lan966x *lan966x = (struct lan966x *)fdma->priv;
+
+	*dataptr = lan966x->tx.dcbs_buf[dcb].dma_addr + XDP_PACKET_HEADROOM;
+
+	return 0;
+}
+
 void lan966x_fdma_llp_configure(struct lan966x *lan966x, u64 addr,
 				u8 channel_id)
 {
@@ -251,35 +271,18 @@ static int lan966x_fdma_tx_alloc(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
 	struct fdma *fdma = tx->fdma;
-	struct fdma_dcb *dcb;
-	struct fdma_db *db;
-	int size;
-	int i, j;
+	int err;
 
 	tx->dcbs_buf = kcalloc(fdma->n_dcbs, sizeof(struct lan966x_tx_dcb_buf),
 			       GFP_KERNEL);
 	if (!tx->dcbs_buf)
 		return -ENOMEM;
 
-	/* calculate how many pages are needed to allocate the dcbs */
-	size = sizeof(struct fdma_dcb) * fdma->n_dcbs;
-	size = ALIGN(size, PAGE_SIZE);
-	fdma->dcbs = dma_alloc_coherent(lan966x->dev, size, &fdma->dma, GFP_KERNEL);
-	if (!fdma->dcbs)
+	err = fdma_alloc_coherent(lan966x->dev, fdma);
+	if (err)
 		goto out;
 
-	/* Now for each dcb allocate the db */
-	for (i = 0; i < FDMA_DCB_MAX; ++i) {
-		dcb = &fdma->dcbs[i];
-
-		for (j = 0; j < FDMA_TX_DCB_MAX_DBS; ++j) {
-			db = &dcb->db[j];
-			db->dataptr = 0;
-			db->status = 0;
-		}
-
-		lan966x_fdma_tx_add_dcb(tx, dcb);
-	}
+	fdma_dcbs_init(fdma, 0, 0);
 
 	lan966x_fdma_llp_configure(lan966x, fdma->dma, fdma->channel_id);
 
@@ -293,14 +296,9 @@ out:
 static void lan966x_fdma_tx_free(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
-	struct fdma *fdma = tx->fdma;
-	int size;
 
 	kfree(tx->dcbs_buf);
-
-	size = sizeof(struct fdma_dcb) * fdma->n_dcbs;
-	size = ALIGN(size, PAGE_SIZE);
-	dma_free_coherent(lan966x->dev, size, fdma->dcbs, fdma->dma);
+	fdma_free_coherent(lan966x->dev, tx->fdma);
 }
 
 void lan966x_fdma_tx_activate(struct lan966x_tx *tx)
@@ -757,11 +755,6 @@ int lan966x_fdma_xmit_xdpf(struct lan966x_port *port, void *ptr, u32 len)
 
 		next_dcb_buf->data.xdpf = xdpf;
 		next_dcb_buf->len = xdpf->len + IFH_LEN_BYTES;
-
-		/* Setup next dcb */
-		lan966x_fdma_tx_setup_dcb(tx, next_to_use,
-					  xdpf->len + IFH_LEN_BYTES,
-					  dma_addr);
 	} else {
 		page = ptr;
 
@@ -778,11 +771,6 @@ int lan966x_fdma_xmit_xdpf(struct lan966x_port *port, void *ptr, u32 len)
 
 		next_dcb_buf->data.page = page;
 		next_dcb_buf->len = len + IFH_LEN_BYTES;
-
-		/* Setup next dcb */
-		lan966x_fdma_tx_setup_dcb(tx, next_to_use,
-					  len + IFH_LEN_BYTES,
-					  dma_addr + XDP_PACKET_HEADROOM);
 	}
 
 	/* Fill up the buffer */
@@ -792,6 +780,17 @@ int lan966x_fdma_xmit_xdpf(struct lan966x_port *port, void *ptr, u32 len)
 	next_dcb_buf->used = true;
 	next_dcb_buf->ptp = false;
 	next_dcb_buf->dev = port->dev;
+
+	__fdma_dcb_add(tx->fdma,
+		       next_to_use,
+		       0,
+		       FDMA_DCB_STATUS_SOF |
+		       FDMA_DCB_STATUS_EOF |
+		       FDMA_DCB_STATUS_BLOCKO(0) |
+		       FDMA_DCB_STATUS_BLOCKL(next_dcb_buf->len) |
+		       FDMA_DCB_STATUS_INTR,
+		       &fdma_nextptr_cb,
+		       &lan966x_fdma_xdp_tx_dataptr_cb);
 
 	/* Start the transmission */
 	lan966x_fdma_tx_start(tx);
@@ -852,9 +851,6 @@ int lan966x_fdma_xmit(struct sk_buff *skb, __be32 *ifh, struct net_device *dev)
 		goto release;
 	}
 
-	/* Setup next dcb */
-	lan966x_fdma_tx_setup_dcb(tx, next_to_use, skb->len, dma_addr);
-
 	/* Fill up the buffer */
 	next_dcb_buf = &tx->dcbs_buf[next_to_use];
 	next_dcb_buf->use_skb = true;
@@ -869,6 +865,15 @@ int lan966x_fdma_xmit(struct sk_buff *skb, __be32 *ifh, struct net_device *dev)
 	if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP &&
 	    LAN966X_SKB_CB(skb)->rew_op == IFH_REW_OP_TWO_STEP_PTP)
 		next_dcb_buf->ptp = true;
+
+	fdma_dcb_add(tx->fdma,
+		     next_to_use,
+		     0,
+		     FDMA_DCB_STATUS_SOF |
+		     FDMA_DCB_STATUS_EOF |
+		     FDMA_DCB_STATUS_BLOCKO(0) |
+		     FDMA_DCB_STATUS_BLOCKL(skb->len) |
+		     FDMA_DCB_STATUS_INTR);
 
 	/* Start the transmission */
 	lan966x_fdma_tx_start(tx);
@@ -1026,6 +1031,16 @@ void lan966x_fdma_netdev_deinit(struct lan966x *lan966x, struct net_device *dev)
 	}
 }
 
+static struct fdma lan966x_fdma_tx = {
+	.channel_id = FDMA_INJ_CHANNEL,
+	.n_dcbs = 512,
+	.n_dbs = 1,
+	.ops = {
+		.dataptr_cb = &lan966x_fdma_tx_dataptr_cb,
+		.nextptr_cb = &fdma_nextptr_cb,
+	},
+};
+
 int lan966x_fdma_init(struct lan966x *lan966x)
 {
 	int err;
@@ -1037,8 +1052,11 @@ int lan966x_fdma_init(struct lan966x *lan966x)
 	lan966x->rx.fdma->channel_id = FDMA_XTR_CHANNEL;
 	lan966x->rx.max_mtu = lan966x_fdma_get_max_frame(lan966x);
 	lan966x->tx.lan966x = lan966x;
-	lan966x->tx.fdma->channel_id = FDMA_INJ_CHANNEL;
 	lan966x->tx.last_in_use = -1;
+	lan966x->tx.fdma = &lan966x_fdma_tx;
+	lan966x->tx.fdma->priv = lan966x;
+	lan966x->tx.fdma->size = fdma_get_size(lan966x->tx.fdma);
+	lan966x->tx.fdma->db_size = PAGE_SIZE << lan966x->rx.page_order;
 
 	err = lan966x_fdma_rx_alloc(&lan966x->rx);
 	if (err)
@@ -1046,7 +1064,7 @@ int lan966x_fdma_init(struct lan966x *lan966x)
 
 	err = lan966x_fdma_tx_alloc(&lan966x->tx);
 	if (err) {
-		lan966x_fdma_rx_free(&lan966x->rx);
+		fdma_free_coherent(lan966x->dev, lan966x->rx.fdma);
 		return err;
 	}
 
