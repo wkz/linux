@@ -567,7 +567,7 @@ irqreturn_t lan966x_fdma_irq_handler(int irq, void *args)
 	return IRQ_HANDLED;
 }
 
-int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx)
+static int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx)
 {
 	struct lan966x_tx_dcb_buf *dcb_buf;
 	int i;
@@ -582,7 +582,7 @@ int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx)
 	return -1;
 }
 
-static void lan966x_fdma_tx_start(struct lan966x_tx *tx)
+void lan966x_fdma_tx_start(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
 
