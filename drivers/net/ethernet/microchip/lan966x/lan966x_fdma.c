@@ -716,6 +716,7 @@ int lan966x_fdma_xmit_xdpf(struct lan966x_port *port, void *ptr, u32 len)
 	int next_to_use;
 	__be32 *ifh;
 	int ret = 0;
+	u64 status;
 
 	spin_lock(&lan966x->tx_lock);
 
@@ -781,14 +782,20 @@ int lan966x_fdma_xmit_xdpf(struct lan966x_port *port, void *ptr, u32 len)
 	next_dcb_buf->ptp = false;
 	next_dcb_buf->dev = port->dev;
 
+	status = FDMA_DCB_STATUS_SOF |
+		 FDMA_DCB_STATUS_EOF |
+		 FDMA_DCB_STATUS_BLOCKO(0) |
+		 FDMA_DCB_STATUS_BLOCKL(next_dcb_buf->len);
+
+	/* Only require an interrupt for every other tx DCB */
+	fdma_dcb_advance(tx->fdma);
+	if (tx->fdma->dcb_index % 2)
+		status |= FDMA_DCB_STATUS_INTR;
+
 	__fdma_dcb_add(tx->fdma,
 		       next_to_use,
 		       0,
-		       FDMA_DCB_STATUS_SOF |
-		       FDMA_DCB_STATUS_EOF |
-		       FDMA_DCB_STATUS_BLOCKO(0) |
-		       FDMA_DCB_STATUS_BLOCKL(next_dcb_buf->len) |
-		       FDMA_DCB_STATUS_INTR,
+		       status,
 		       &fdma_nextptr_cb,
 		       &lan966x_fdma_xdp_tx_dataptr_cb);
 
@@ -811,6 +818,7 @@ int lan966x_fdma_xmit(struct sk_buff *skb, __be32 *ifh, struct net_device *dev)
 	int needed_tailroom;
 	dma_addr_t dma_addr;
 	int next_to_use;
+	u64 status;
 	int err;
 
 	/* Get next index */
@@ -866,14 +874,17 @@ int lan966x_fdma_xmit(struct sk_buff *skb, __be32 *ifh, struct net_device *dev)
 	    LAN966X_SKB_CB(skb)->rew_op == IFH_REW_OP_TWO_STEP_PTP)
 		next_dcb_buf->ptp = true;
 
-	fdma_dcb_add(tx->fdma,
-		     next_to_use,
-		     0,
-		     FDMA_DCB_STATUS_SOF |
-		     FDMA_DCB_STATUS_EOF |
-		     FDMA_DCB_STATUS_BLOCKO(0) |
-		     FDMA_DCB_STATUS_BLOCKL(skb->len) |
-		     FDMA_DCB_STATUS_INTR);
+	status = FDMA_DCB_STATUS_SOF |
+		 FDMA_DCB_STATUS_EOF |
+		 FDMA_DCB_STATUS_BLOCKO(0) |
+		 FDMA_DCB_STATUS_BLOCKL(skb->len);
+
+	/* Only require an interrupt for every other tx DCB */
+	fdma_dcb_advance(tx->fdma);
+	if (tx->fdma->dcb_index % 2)
+		status |= FDMA_DCB_STATUS_INTR;
+
+	fdma_dcb_add(tx->fdma, next_to_use, 0, status);
 
 	/* Start the transmission */
 	lan966x_fdma_tx_start(tx);
