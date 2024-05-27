@@ -694,27 +694,17 @@ static void lan966x_fdma_tx_setup_dcb(struct lan966x_tx *tx,
 			  FDMA_DCB_STATUS_BLOCKL(len);
 }
 
-static void lan966x_fdma_tx_start(struct lan966x_tx *tx, int next_to_use)
+static void lan966x_fdma_tx_start(struct lan966x_tx *tx)
 {
 	struct lan966x *lan966x = tx->lan966x;
-	struct fdma *fdma = tx->fdma;
-	struct fdma_dcb *dcb;
 
 	if (likely(lan966x->tx.activated)) {
-		/* Connect current dcb to the next db */
-		dcb = &fdma->dcbs[tx->last_in_use];
-		dcb->nextptr = fdma->dma + (next_to_use *
-					  sizeof(struct fdma_dcb));
-
 		lan966x_fdma_tx_reload(tx);
 	} else {
 		/* Because it is first time, then just activate */
 		lan966x->tx.activated = true;
 		lan966x_fdma_tx_activate(tx);
 	}
-
-	/* Move to next dcb because this last in use */
-	tx->last_in_use = next_to_use;
 }
 
 int lan966x_fdma_xmit_xdpf(struct lan966x_port *port, void *ptr, u32 len)
@@ -804,7 +794,7 @@ int lan966x_fdma_xmit_xdpf(struct lan966x_port *port, void *ptr, u32 len)
 	next_dcb_buf->dev = port->dev;
 
 	/* Start the transmission */
-	lan966x_fdma_tx_start(tx, next_to_use);
+	lan966x_fdma_tx_start(tx);
 
 out:
 	spin_unlock(&lan966x->tx_lock);
@@ -881,7 +871,7 @@ int lan966x_fdma_xmit(struct sk_buff *skb, __be32 *ifh, struct net_device *dev)
 		next_dcb_buf->ptp = true;
 
 	/* Start the transmission */
-	lan966x_fdma_tx_start(tx, next_to_use);
+	lan966x_fdma_tx_start(tx);
 
 	return NETDEV_TX_OK;
 
