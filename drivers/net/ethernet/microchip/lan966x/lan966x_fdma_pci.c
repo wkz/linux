@@ -449,6 +449,7 @@ static int lan966x_fdma_pci_xmit(struct sk_buff *skb, __be32 *ifh,
 	struct lan966x *lan966x = port->lan966x;
 	struct lan966x_tx *tx = &lan966x->tx;
 	struct fdma *fdma = tx->fdma;
+	bool ptp = false;
 	int next_to_use;
 	void *virt_addr;
 
@@ -476,8 +477,15 @@ static int lan966x_fdma_pci_xmit(struct sk_buff *skb, __be32 *ifh,
 		     FDMA_DCB_STATUS_BLOCKO(0) |
 		     FDMA_DCB_STATUS_BLOCKL(IFH_LEN_BYTES + skb->len + ETH_FCS_LEN));
 
+	if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP &&
+	    LAN966X_SKB_CB(skb)->rew_op == IFH_REW_OP_TWO_STEP_PTP)
+		ptp = true;
+
 	/* Start the transmission */
 	lan966x_fdma_tx_start(tx);
+
+	if (!ptp)
+		dev_consume_skb_any(skb);
 
 	return NETDEV_TX_OK;
 }
