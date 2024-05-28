@@ -1137,7 +1137,6 @@ static const struct sparx5_match_data sparx5_desc = {
 		.gate_cnt = 1024,
 		.lb_cnt = 4616,
 		.tod_pin = 4,
-		.fdma_db_cnt = 15,
 		.vmid_cnt = 511,
 		.arp_tbl_cnt = 2048,
 		.vcaps = sparx5_vcaps,

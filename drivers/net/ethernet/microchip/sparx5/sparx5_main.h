@@ -525,7 +525,6 @@ struct sparx5_consts {
 	int gate_cnt;
 	int lb_cnt;
 	int tod_pin;
-	int fdma_db_cnt;
 	int vmid_cnt;
 	int arp_tbl_cnt;
 	const struct sparx5_vcap_inst *vcaps_cfg;
