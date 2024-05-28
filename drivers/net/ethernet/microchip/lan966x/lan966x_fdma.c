@@ -281,7 +281,6 @@ void lan966x_fdma_tx_disable(struct lan966x_tx *tx)
 		lan966x, FDMA_CH_DB_DISCARD);
 
 	tx->activated = false;
-	tx->last_in_use = -1;
 }
 
 void lan966x_fdma_tx_reload(struct lan966x_tx *tx)
@@ -967,7 +966,6 @@ int lan966x_fdma_init(struct lan966x *lan966x)
 	lan966x->rx.fdma->db_size = PAGE_SIZE << lan966x->rx.page_order;
 
 	lan966x->tx.lan966x = lan966x;
-	lan966x->tx.last_in_use = -1;
 	lan966x->tx.fdma = &lan966x_fdma_tx;
 	lan966x->tx.fdma->priv = lan966x;
 	lan966x->tx.fdma->size = fdma_get_size(lan966x->tx.fdma);

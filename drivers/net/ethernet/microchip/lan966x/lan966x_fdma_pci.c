@@ -542,7 +542,6 @@ static int lan966x_fdma_pci_init(struct lan966x *lan966x)
 	lan966x->rx.fdma->db_size = FDMA_PCI_DB_SIZE(lan966x->rx.max_mtu);
 	lan966x->rx.fdma->size = fdma_get_size_contiguous(lan966x->rx.fdma);
 	lan966x->tx.lan966x = lan966x;
-	lan966x->tx.last_in_use = -1;
 	lan966x->tx.fdma = &lan966x_fdma_tx;
 	lan966x->tx.fdma->db_size = FDMA_PCI_DB_SIZE(lan966x->rx.max_mtu);
 	lan966x->tx.fdma->size = fdma_get_size_contiguous(lan966x->tx.fdma);

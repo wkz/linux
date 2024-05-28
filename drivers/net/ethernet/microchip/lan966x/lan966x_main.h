@@ -279,8 +279,6 @@ struct lan966x_tx {
 
 	struct fdma *fdma;
 
-	u16 last_in_use;
-
 #ifdef CONFIG_MFD_LAN966X_PCI
 	struct fdma_pci_atu_region *atu_region;
 #endif
