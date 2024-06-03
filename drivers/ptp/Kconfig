@@ -211,12 +211,12 @@ config PTP_DFL_TOD
 	  To compile this driver as a module, choose M here: the module
 	  will be called ptp_dfl_tod.
 
-config PTP_1588_CLOCK_ZL80732
-	tristate "Microchip zl80732 as PTP clock"
+config PTP_1588_CLOCK_ZL3073X
+	tristate "Microchip zl3073x as PTP clock"
 	depends on PTP_1588_CLOCK && SPI
 	default n
 	help
-	  This driver adds support for using IDT ZL80732 as a PTP
+	  This driver adds support for using IDT ZL3073X as a PTP
 	  clock.
 
 	  To compile this driver as a module, choose M here: the module
