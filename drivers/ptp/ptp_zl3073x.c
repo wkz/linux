@@ -97,6 +97,7 @@
 
 static const struct of_device_id zl3073x_match[] = {
 	{ .compatible = "microchip,zl80732-phc" },
+	{ .compatible = "microchip,zl30732b-phc" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, zl3073x_match);
