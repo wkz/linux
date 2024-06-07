@@ -190,7 +190,6 @@ struct sparx5_rr_router_leg {
 	struct net_device *dev;
 	struct sparx5 *sparx5;
 	struct list_head leg_list_node; /* Router member */
-	unsigned char hwaddr[ETH_ALEN];
 	u16 vmid; /* Internal id */
 	u32 vid; /* VLAN id */
 };
@@ -660,7 +659,7 @@ sparx5_rr_fib_info_nh_group_equal(struct sparx5_rr_nexthop_group *nh_grp,
 
 	for (u8 i = 0; i < nhs; i++) {
 		nhc = sparx5_rr_fib_info_nhc(fi, i);
-		ifindex = nhc->nhc_dev->ifindex;
+		ifindex = nhc->nhc_dev ? nhc->nhc_dev->ifindex : -1;
 		sparx5_rr_fib_nhc_to_gw(nhc, fi->version, &gw);
 
 		if (!sparx5_rr_nexthop_group_has_nexthop(nh_grp, &gw, ifindex))
@@ -1176,10 +1175,9 @@ static int sparx5_rr_nexthop_init(struct sparx5 *sparx5,
 				  struct sparx5_rr_nexthop *nh,
 				  struct fib_nh_common *fnhc)
 {
-	struct net_device *dev = fnhc->nhc_dev;
 	struct sparx5_rr_router_leg *leg;
 
-	nh->ifindex = dev->ifindex;
+	nh->ifindex = -1;
 	nh->grp = nh_grp;
 	nh->gateway = fnhc->nhc_gw_family != 0;
 	nh->trapped = false;
@@ -1211,6 +1209,12 @@ static int sparx5_rr_nexthop_init(struct sparx5 *sparx5,
 		return 0;
 	}
 
+	/* Blackhole route nexthops have no egress device. */
+	if (!fnhc->nhc_dev)
+		return 0;
+
+	nh->ifindex = fnhc->nhc_dev->ifindex;
+
 	/* When a router leg is removed, all the nexthops with gateway IPs in a
 	 * subnet governed by the leg will receive fib delete events. However,
 	 * these delete events are received one by one. Therefore, this nexthop
@@ -1221,7 +1225,7 @@ static int sparx5_rr_nexthop_init(struct sparx5 *sparx5,
 	 * trapping nexthops which do not have a neigh_entry. As fib deletion
 	 * events are processed, we converge to the proper state.
 	 */
-	leg = sparx5_rr_leg_find_by_dev(sparx5, dev);
+	leg = sparx5_rr_leg_find_by_dev(sparx5, fnhc->nhc_dev);
 	if (!leg)
 		return 0;
 
@@ -1789,15 +1793,33 @@ out:
 	return err;
 }
 
+/* Get egress mac and vmid for nexthop. */
+static void sparx5_rr_nexthop_egress_derive(struct sparx5_rr_nexthop *nh,
+					    u8 *mac, u16 *vmid)
+{
+	struct sparx5_rr_neigh_entry *nh_neigh = nh->neigh_entry;
+
+	nh->trapped = !nh_neigh || is_zero_ether_addr(nh_neigh->hwaddr);
+
+	if (nh_neigh) {
+		memcpy(mac, nh_neigh->hwaddr, ETH_ALEN);
+		*vmid = nh_neigh->vmid;
+		return;
+	}
+
+	eth_zero_addr(mac);
+	*vmid = 0;
+}
+
 static int
 sparx5_rr_fib_entry_ecmp_hw_apply(struct sparx5 *sparx5,
 				  struct sparx5_rr_fib_entry *fib_entry)
 {
 	struct sparx5_rr_nexthop_group_info *nhgi = fib_entry->nh_grp->nhgi;
-	unsigned char zero_mac[ETH_ALEN] __aligned(2);
-	struct sparx5_rr_neigh_entry *nh_neigh;
+	unsigned char mac[ETH_ALEN] __aligned(2);
 	struct sparx5_rr_nexthop *nh;
 	int err, i, offset;
+	u16 vmid;
 
 	offset = sparx5_rr_arp_tbl_grp_alloc(sparx5, nhgi->count);
 
@@ -1806,21 +1828,12 @@ sparx5_rr_fib_entry_ecmp_hw_apply(struct sparx5 *sparx5,
 		return offset;
 	}
 
-	/* Trap frames with zero mac */
-	eth_zero_addr(zero_mac);
-
 	for (i = 0; i < nhgi->count; i++) {
 		nh = &nhgi->nexthops[i];
-		nh_neigh = nh->neigh_entry;
-		nh->trapped = !nh_neigh || is_zero_ether_addr(nh_neigh->hwaddr);
-		if (nh_neigh)
-			sparx5_rr_arp_tbl_hw_addr_apply(sparx5,
-							nh_neigh->hwaddr,
-							nh_neigh->vmid,
-							offset + i);
-		else
-			sparx5_rr_arp_tbl_hw_addr_apply(sparx5, zero_mac, 0,
-							offset + i);
+
+		sparx5_rr_nexthop_egress_derive(nh, mac, &vmid);
+
+		sparx5_rr_arp_tbl_hw_addr_apply(sparx5, mac, vmid, offset + i);
 	}
 
 	err = sparx5_rr_lpm_arp_ptr_create(sparx5,
@@ -1846,12 +1859,83 @@ err_arp_ptr_create:
 	return err;
 }
 
+static u16 sparx5_rr_blackhole_vmid(struct sparx5 *sparx5)
+{
+	/* Reserve last vmid for blackhole leg. */
+	return sparx5->data->consts.vmid_cnt - 1;
+}
+
+static u16 sparx5_rr_blackhole_vid(struct sparx5 *sparx5)
+{
+	/* Reserve VID 4096 for blackhole leg. The HW VLAN table has entries
+	 * beyond 4095, for internal use.
+	 */
+	return VLAN_N_VID;
+}
+
+static int
+sparx5_rr_fib_blackhole_hw_apply(struct sparx5 *sparx5,
+				 struct sparx5_rr_fib_entry *fib_entry)
+{
+	u16 bh_vmid = sparx5_rr_blackhole_vmid(sparx5);
+	unsigned char mac[ETH_ALEN];
+
+	/* Hardware blackholes are implemented by:
+	 *
+	 * 1) Making sure traffic is not trapped with non-zero dmac.
+	 * 2) Using reserved router leg vmid for egress.
+	 * 3) This router leg is attached to a VLAN id > 4095.
+	 * 4) The port-mask for this VLAN is all zero.
+	 *
+	 * The hardware VLAN table has more than 4096 entries. The specific size
+	 * depends on the chip. LAN969x has 4608 and Sparx5 has 5120 entries.
+	 * These additional VLAN entries can be used for internal logic.
+	 *
+	 * The port-mask for the blackhole VLAN is zero. Therefore, frames routed
+	 * to the blackhole leg will not egress on any ports.
+	 */
+	eth_zero_addr(mac);
+	mac[5] = 0xff;
+
+	return sparx5_rr_lpm_arp_entry_create(sparx5, &fib_entry->key.addr,
+					      fib_entry->key.prefix_len, mac,
+					      bh_vmid, &fib_entry->hw_route);
+}
+
+static int sparx5_rr_fib_trap_hw_apply(struct sparx5 *sparx5,
+				       struct sparx5_rr_fib_entry *fib_entry)
+{
+	unsigned char zero_mac[ETH_ALEN];
+	u16 vmid = 0; /* VMID does not matter */
+
+	/* Trap frames with zero mac */
+	eth_zero_addr(zero_mac);
+
+	return sparx5_rr_lpm_arp_entry_create(sparx5, &fib_entry->key.addr,
+					      fib_entry->key.prefix_len,
+					      zero_mac, vmid,
+					      &fib_entry->hw_route);
+}
+
+static int sparx5_rr_fib_nexthop_hw_apply(struct sparx5 *sparx5,
+					  struct sparx5_rr_fib_entry *fib_entry,
+					  struct sparx5_rr_nexthop *nh)
+{
+	unsigned char mac[ETH_ALEN];
+	u16 vmid;
+
+	sparx5_rr_nexthop_egress_derive(nh, mac, &vmid);
+
+	return sparx5_rr_lpm_arp_entry_create(sparx5, &fib_entry->key.addr,
+					      fib_entry->key.prefix_len, mac,
+					      vmid, &fib_entry->hw_route);
+}
+
 static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 					struct sparx5_rr_fib_entry *fib_entry)
 {
 	struct sparx5_rr_nexthop_group_info *nhgi = fib_entry->nh_grp->nhgi;
 	unsigned char zero_mac[ETH_ALEN] __aligned(2);
-	struct sparx5_rr_neigh_entry *nh_neigh;
 	struct sparx5_rr_nexthop *nh;
 	int err = 0;
 
@@ -1866,49 +1950,43 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 		 * device can receive traffic even when default gateways are
 		 * configured.
 		 */
-		if (WARN_ON(nhgi->count != 1 || nhgi->nexthops->gateway)) {
-			err = -EINVAL;
-			goto out;
-		}
 
+		/* Mark kernel fib as trapped. */
 		fib_entry->trap = true;
-		/* write zero mac ARP ENTRY */
-		err = sparx5_rr_lpm_arp_entry_create(sparx5,
-						     &fib_entry->key.addr,
-						     fib_entry->key.prefix_len,
-						     zero_mac, 0,
-						     &fib_entry->hw_route);
+
+		err = sparx5_rr_fib_trap_hw_apply(sparx5, fib_entry);
 		goto out;
+
 	case SPARX5_RR_FIB_TYPE_UNICAST:
+		fib_entry->trap = false;
+
 		if (!nhgi->nexthops->gateway) {
-			/* Directly connected subnet. Trap traffic for subnet. */
-			err = sparx5_rr_lpm_arp_entry_create(sparx5,
-							     &fib_entry->key.addr,
-							     fib_entry->key.prefix_len,
-							     zero_mac, 0,
-							     &fib_entry->hw_route);
-			goto out;
-		} else if (nhgi->count == 1) { /* Use arp_entry */
-			nh = &nhgi->nexthops[0];
-			nh_neigh = nh->neigh_entry;
-
-			nh->trapped = is_zero_ether_addr(nh_neigh->hwaddr);
-
-			err = sparx5_rr_lpm_arp_entry_create(sparx5,
-							     &fib_entry->key.addr,
-							     fib_entry->key.prefix_len,
-							     nh_neigh->hwaddr,
-							     nh_neigh->vmid,
-							     &fib_entry->hw_route);
-			goto out;
-		} else {
-			/* Multiple nexthops so we use the HW arp table. */
-			err = sparx5_rr_fib_entry_ecmp_hw_apply(sparx5,
-								fib_entry);
+			/* Directly connected subnet. Trap traffic so kernel
+			 * can perform ARP/NDP on our behalf.
+			 */
+			err = sparx5_rr_fib_trap_hw_apply(sparx5, fib_entry);
 			goto out;
 		}
+
+		if (nhgi->count == 1) { /* Use arp_entry */
+			nh = &nhgi->nexthops[0];
+			err = sparx5_rr_fib_nexthop_hw_apply(sparx5,
+							     fib_entry,
+							     nh);
+			goto out;
+		}
+
+		/* Multiple nexthops so we use the HW arp table. */
+		err = sparx5_rr_fib_entry_ecmp_hw_apply(sparx5,
+							fib_entry);
+		goto out;
 
 		break;
+	case SPARX5_RR_FIB_TYPE_BLACKHOLE:
+		fib_entry->trap = false;
+		err = sparx5_rr_fib_blackhole_hw_apply(sparx5, fib_entry);
+		goto out;
+
 	default:
 		dev_warn(sparx5->dev, "Fib entry offload, unhandled type=%d\n",
 			 fib_entry->type);
@@ -2173,7 +2251,26 @@ static void sparx5_rr_lpm_link_local_destroy(struct sparx5 *sparx5)
 	llocal->vrule_id_valid = false;
 }
 
- /* Router legs are identified by their VMID in hw */
+static struct sparx5_rr_router_leg *
+__sparx5_rr_leg_alloc(struct sparx5 *sparx5, struct net_device *dev, u16 vmid,
+		      u16 vid)
+{
+	struct sparx5_rr_router_leg *leg;
+
+	leg = kzalloc(sizeof(*leg), GFP_KERNEL);
+	if (!leg)
+		return NULL;
+
+	INIT_LIST_HEAD(&leg->leg_list_node);
+	leg->dev = dev;
+	leg->vmid = vmid;
+	leg->vid = vid;
+	leg->sparx5 = sparx5;
+
+	return leg;
+}
+
+/* Router legs are identified by their VMID in hw */
 static struct sparx5_rr_router_leg *
 sparx5_rr_leg_alloc(struct sparx5 *sparx5, struct net_device *dev, u16 vid)
 {
@@ -2184,16 +2281,9 @@ sparx5_rr_leg_alloc(struct sparx5 *sparx5, struct net_device *dev, u16 vid)
 	if (next_vmid < 0)
 		return NULL;
 
-	leg = kzalloc(sizeof(*leg), GFP_KERNEL);
+	leg = __sparx5_rr_leg_alloc(sparx5, dev, next_vmid, vid);
 	if (!leg)
 		goto err_kzalloc;
-
-	INIT_LIST_HEAD(&leg->leg_list_node);
-	leg->dev = dev;
-	leg->vmid = next_vmid;
-	leg->vid = vid;
-	leg->sparx5 = sparx5;
-	ether_addr_copy(leg->hwaddr, dev->dev_addr);
 
 	return leg;
 
@@ -2294,7 +2384,9 @@ static bool sparx5_rr_fib_info_should_offload(struct sparx5 *sparx5,
 	u8 type = sparx5_rr_fib_info_type(fi);
 	int nhs = sparx5_rr_fib_info_nhs(fi);
 
-	if (!(type == RTN_UNICAST || type == RTN_LOCAL))
+	if (!(type == RTN_UNICAST ||
+	      type == RTN_LOCAL ||
+	      type == RTN_BLACKHOLE))
 		return false;
 
 	if (!(tb_id == RT_TABLE_MAIN ||
@@ -2313,7 +2405,8 @@ static bool sparx5_rr_fib_info_should_offload(struct sparx5 *sparx5,
 	for (int i = 0; i < nhs; i++) {
 		struct fib_nh_common *nhc = sparx5_rr_fib_info_nhc(fi, i);
 
-		if (!sparx5_rr_dev_real_is_vlan_aware(nhc->nhc_dev))
+		if (nhc->nhc_dev &&
+		    !sparx5_rr_dev_real_is_vlan_aware(nhc->nhc_dev))
 			return false;
 
 		/* HW only supports equal weight nexthops */
@@ -2327,6 +2420,7 @@ static bool sparx5_rr_fib_info_should_offload(struct sparx5 *sparx5,
 static int sparx5_rr_fib_replace(struct sparx5 *sparx5,
 				 struct sparx5_rr_fib_info *fi)
 {
+	u8 new_fib_type, fi_type = sparx5_rr_fib_info_type(fi);
 	struct sparx5_rr_nexthop_group *old_nh_grp;
 	struct sparx5_rr_fib_entry *fib_entry;
 	struct sparx5_rr_fib_key key;
@@ -2374,9 +2468,14 @@ static int sparx5_rr_fib_replace(struct sparx5 *sparx5,
 		goto out_fib_mark_offload;
 	}
 
+	new_fib_type = sparx5_rr_rtm_type2fib_type(fi_type);
+
 	/* Nexthop group did not change, so skip group reallocation. */
-	if (sparx5_rr_fib_info_nh_group_equal(old_nh_grp, &fib_entry->fi))
+	if (fib_entry->type == new_fib_type &&
+	    sparx5_rr_fib_info_nh_group_equal(old_nh_grp, &fib_entry->fi))
 		goto out_fib_mark_offload;
+
+	fib_entry->type = new_fib_type;
 
 	/* Fib's nexthop group changed, so we must update it */
 	err = sparx5_rr_entry_nexthop_group_update(sparx5, fib_entry);
@@ -3051,6 +3150,41 @@ static int sparx5_rr_netdevice_event(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
+static int sparx5_rr_blackhole_leg_create(struct sparx5 *sparx5)
+{
+	u16 vmid = sparx5_rr_blackhole_vmid(sparx5);
+	u16 vid = sparx5_rr_blackhole_vid(sparx5);
+	struct sparx5_rr_router_leg *leg;
+
+	leg = __sparx5_rr_leg_alloc(sparx5, NULL, vmid, vid);
+	if (!leg)
+		return -ENOMEM;
+
+	set_bit(vmid, sparx5->router->vmid_mask);
+
+	list_add(&leg->leg_list_node, &sparx5->router->leg_list);
+	sparx5_rr_leg_hw_init(sparx5, leg);
+
+	dev_dbg(sparx5->dev, "Blackhole leg create vid=%u vmid=%u\n",
+		leg->vid, leg->vmid);
+
+	return 0;
+}
+
+static void sparx5_rr_blackhole_leg_destroy(struct sparx5 *sparx5)
+{
+	struct list_head *leg_list = &sparx5->router->leg_list;
+	u16 vmid = sparx5_rr_blackhole_vmid(sparx5);
+	struct sparx5_rr_router_leg *leg, *tmp;
+
+	list_for_each_entry_safe(leg, tmp, leg_list, leg_list_node) {
+		if (leg->vmid == vmid) {
+			sparx5_rr_router_leg_destroy(leg);
+			break;
+		}
+	}
+}
+
 int sparx5_rr_router_init(struct sparx5 *sparx5)
 {
 	struct sparx5_router *router;
@@ -3171,8 +3305,14 @@ int sparx5_rr_router_init(struct sparx5 *sparx5)
 		 ANA_ACL_VCAP_S2_MISC_CTRL_ACL_RT_SEL, sparx5,
 		 ANA_ACL_VCAP_S2_MISC_CTRL);
 
+	/* Add reserved leg for blackhole routes. */
+	err = sparx5_rr_blackhole_leg_create(sparx5);
+	if (err)
+		goto err_blackhole_leg;
+
 	return 0;
 
+err_blackhole_leg:
 err_get_port_dev:
 	rhashtable_destroy(&router->fib_ht);
 err_fib_ht_init:
@@ -3204,6 +3344,7 @@ void sparx5_rr_router_deinit(struct sparx5 *sparx5)
 {
 	struct sparx5_router *router = sparx5->router;
 
+	sparx5_rr_blackhole_leg_destroy(sparx5);
 	rhashtable_destroy(&router->fib_ht);
 	rhashtable_destroy(&router->neigh_ht);
 	unregister_inet6addr_notifier(&router->inet6addr_nb);
