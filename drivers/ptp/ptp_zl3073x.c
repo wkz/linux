@@ -599,14 +599,20 @@ static int zl3073x_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 dco[6];
 	s64 ref;
+	s64 ppm;
 
-	if (!scaled_ppm)
+	/* Store the scaled_ppm into a s64 variable because on 32bit arch, the
+	 * multiplication with ZL30373X_1PPM_FORMAT with overflow meaning that
+	 * will not be able to adjust to lowest ns
+	 */
+	ppm = scaled_ppm;
+	if (!ppm)
 		return 0;
 
 	mutex_lock(zl3073x->lock);
 
-	ref = ZL3073X_1PPM_FORMAT * (scaled_ppm >> 16);
-	ref += (ZL3073X_1PPM_FORMAT * (0xffff & scaled_ppm)) >> 16;
+	ref = ZL3073X_1PPM_FORMAT * (ppm >> 16);
+	ref += (ZL3073X_1PPM_FORMAT * (0xffff & ppm)) >> 16;
 
 	/* The value that is written in HW is in 2 complement */
 	ref = ~ref + 1;
