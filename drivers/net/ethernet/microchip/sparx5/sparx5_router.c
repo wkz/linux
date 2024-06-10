@@ -250,6 +250,7 @@ enum sparx5_rr_fib_type {
 	SPARX5_RR_FIB_TYPE_MULTICAST,
 	SPARX5_RR_FIB_TYPE_BLACKHOLE,
 	SPARX5_RR_FIB_TYPE_PROHIBIT,
+	SPARX5_RR_FIB_TYPE_UNREACHABLE,
 };
 
 struct sparx5_rr_fib_key {
@@ -1375,6 +1376,8 @@ static enum sparx5_rr_fib_type sparx5_rr_rtm_type2fib_type(u8 type)
 		return SPARX5_RR_FIB_TYPE_BLACKHOLE;
 	case RTN_PROHIBIT:
 		return SPARX5_RR_FIB_TYPE_PROHIBIT;
+	case RTN_UNREACHABLE:
+		return SPARX5_RR_FIB_TYPE_UNREACHABLE;
 	default:
 		return SPARX5_RR_FIB_TYPE_INVALID;
 	}
@@ -1945,6 +1948,8 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 	sparx5_rr_fib_debug(sparx5, fib_entry, "apply");
 
 	switch (fib_entry->type) {
+	case SPARX5_RR_FIB_TYPE_UNREACHABLE:
+		fallthrough;
 	case SPARX5_RR_FIB_TYPE_PROHIBIT:
 		/* Ensure kernel can respond with correct ICMP packets. */
 		fallthrough;
@@ -2390,7 +2395,8 @@ static bool sparx5_rr_fib_info_should_offload(struct sparx5 *sparx5,
 	if (!(type == RTN_UNICAST ||
 	      type == RTN_LOCAL ||
 	      type == RTN_BLACKHOLE ||
-	      type == RTN_PROHIBIT))
+	      type == RTN_PROHIBIT ||
+	      type == RTN_UNREACHABLE))
 		return false;
 
 	if (!(tb_id == RT_TABLE_MAIN ||
