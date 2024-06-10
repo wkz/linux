@@ -1945,6 +1945,9 @@ static int sparx5_rr_fib_entry_hw_apply(struct sparx5 *sparx5,
 	sparx5_rr_fib_debug(sparx5, fib_entry, "apply");
 
 	switch (fib_entry->type) {
+	case SPARX5_RR_FIB_TYPE_PROHIBIT:
+		/* Ensure kernel can respond with correct ICMP packets. */
+		fallthrough;
 	case SPARX5_RR_FIB_TYPE_LOCAL:
 		/* Trap traffic destined for device itself, to ensure
 		 * device can receive traffic even when default gateways are
@@ -2386,7 +2389,8 @@ static bool sparx5_rr_fib_info_should_offload(struct sparx5 *sparx5,
 
 	if (!(type == RTN_UNICAST ||
 	      type == RTN_LOCAL ||
-	      type == RTN_BLACKHOLE))
+	      type == RTN_BLACKHOLE ||
+	      type == RTN_PROHIBIT))
 		return false;
 
 	if (!(tb_id == RT_TABLE_MAIN ||
