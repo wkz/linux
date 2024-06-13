@@ -1597,8 +1597,8 @@ sparx5_rr_lpm_arp_entry_create(struct sparx5 *sparx5,
 
 	rule = vcap_alloc_rule(vctrl, pdev, VCAP_CID_PREROUTING_L0,
 			       VCAP_USER_L3, priority, 0);
-	if (!rule)
-		return -ENOMEM;
+	if (IS_ERR(rule))
+		return PTR_ERR(rule);
 
 	err = sparx5_rr_lpm_rule_xip_add(rule, addr, prefix_len);
 	if (err)
@@ -1751,7 +1751,7 @@ static int sparx5_rr_lpm_arp_ptr_create(struct sparx5 *sparx5,
 
 	rule = vcap_alloc_rule(vctrl, pdev, VCAP_CID_PREROUTING_L0,
 			       VCAP_USER_L3, priority, 0);
-	if (!rule)
+	if (IS_ERR(rule))
 		return PTR_ERR(rule);
 
 	err = sparx5_rr_lpm_rule_xip_add(rule, addr, prefix_len);
