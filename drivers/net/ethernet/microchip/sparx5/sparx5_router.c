@@ -2409,6 +2409,15 @@ static bool sparx5_rr_fib_info_should_offload(struct sparx5 *sparx5,
 	if (sparx5_rr_fib_info_is_nh_obj(fi))
 		return false;
 
+	/* For IPv4 the nexthops of these route types have NULL egress device.
+	 * However, for IPv6 the nexthops use the loopback interface, so accept
+	 * early.
+	 */
+	if (type == RTN_BLACKHOLE ||
+	    type == RTN_PROHIBIT ||
+	    type == RTN_UNREACHABLE)
+		return true;
+
 	if (nhs > SPARX5_MAX_ECMP_SIZE)
 		return false;
 
