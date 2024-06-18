@@ -450,7 +450,7 @@ int sparx5_fdma_start(struct sparx5 *sparx5)
 	sparx5->rx.fdma = &sparx5_fdma_rx;
 	sparx5->rx.fdma->priv = sparx5;
 	sparx5->rx.fdma->db_size = ALIGN(sparx5->tx.max_mtu, PAGE_SIZE);
-	sparx5->rx.fdma->size = fdma_get_size_contiguous(sparx5->rx.fdma);
+	sparx5->rx.fdma->size = fdma_get_size(sparx5->rx.fdma);
 
 	/* Reset FDMA state */
 	spx5_wr(FDMA_CTRL_NRESET_SET(0), sparx5, FDMA_CTRL);
