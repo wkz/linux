@@ -309,7 +309,7 @@ netdev_tx_t sparx5_port_xmit_impl(struct sk_buff *skb, struct net_device *dev)
 		ret = sparx5_inject(sparx5, ifh, skb, dev);
 	spin_unlock(&sparx5->tx_lock);
 
-	if (ret == -EBUSY)
+	if (ret == NETDEV_TX_BUSY)
 		goto busy;
 	if (ret < 0)
 		goto drop;
