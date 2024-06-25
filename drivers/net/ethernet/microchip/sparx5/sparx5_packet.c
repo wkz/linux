@@ -215,7 +215,7 @@ static int sparx5_inject(struct sparx5 *sparx5,
 	if (!(QS_INJ_STATUS_FIFO_RDY_GET(val) & BIT(grp))) {
 		pr_err_ratelimited("Injection: Queue not ready: 0x%lx\n",
 				   QS_INJ_STATUS_FIFO_RDY_GET(val));
-		return -EBUSY;
+		return NETDEV_TX_BUSY;
 	}
 
 	/* Indicate SOF */
