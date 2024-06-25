@@ -136,6 +136,11 @@ void sparx5_fdma_tx_activate(struct sparx5 *sparx5, struct sparx5_tx *tx)
 		FDMA_CH_CFG_CH_INJ_PORT_SET(INJ_QUEUE),
 		sparx5, FDMA_CH_CFG(fdma->channel_id));
 
+	/* Enable TX channel DB interrupt */
+	spx5_rmw(BIT(fdma->channel_id),
+		 BIT(fdma->channel_id) & FDMA_INTR_DB_ENA_INTR_DB_ENA,
+		 sparx5, FDMA_INTR_DB_ENA);
+
 	/* Start TX fdma */
 	spx5_rmw(FDMA_PORT_CTRL_INJ_STOP_SET(0), FDMA_PORT_CTRL_INJ_STOP,
 		 sparx5, FDMA_PORT_CTRL(0));
