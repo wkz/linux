@@ -38,6 +38,7 @@
 		};
 
 		spi0: spi@600104000 {
+			compatible = "microchip,sparx5-spi-appl";
 			mux-controls = <&mux>;
 		};
 

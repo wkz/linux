@@ -23,6 +23,8 @@
 #include "sparx5_main_regs.h"
 #include "sparx5_vcap_impl.h"
 
+#include "fdma_api.h"
+
 /* Target chip type */
 enum spx5_target_chiptype {
 	SPX5_TARGET_CT_7546       = 0x7546,  /* SparX-5-64  Enterprise */
@@ -116,22 +118,8 @@ extern const u8 ifh_smac[];
 
 #define FDMA_DCB_MAX			64
 #define FDMA_RX_DCB_MAX_DBS		15
-#define FDMA_TX_DCB_MAX_DBS		1
 #define FDMA_XTR_CHANNEL		6
 #define FDMA_INJ_CHANNEL		0
-
-#define FDMA_DCB_INFO_DATAL(x)		((x) & GENMASK(15, 0))
-#define FDMA_DCB_INFO_TOKEN		BIT(17)
-#define FDMA_DCB_INFO_INTR		BIT(18)
-#define FDMA_DCB_INFO_SW(x)		(((x) << 24) & GENMASK(31, 24))
-
-#define FDMA_DCB_STATUS_BLOCKL(x)	((x) & GENMASK(15, 0))
-#define FDMA_DCB_STATUS_SOF		BIT(16)
-#define FDMA_DCB_STATUS_EOF		BIT(17)
-#define FDMA_DCB_STATUS_INTR		BIT(18)
-#define FDMA_DCB_STATUS_DONE		BIT(19)
-#define FDMA_DCB_STATUS_BLOCKO(x)	(((x) << 20) & GENMASK(31, 20))
-#define FDMA_DCB_INVALID_DATA		0x1
 
 #define FDMA_WEIGHT			4
 
@@ -161,6 +149,10 @@ extern const u8 ifh_smac[];
 
 #define SPARX5_MAX_PTP_ID		512
 
+/* Must be maximum values across all L3 enabled platforms */
+#define SPARX5_ROUTER_LEG_N_VMID 511
+#define SPARX5_ARP_TBL_SIZE 2047
+
 struct sparx5;
 
 /* For each hardware DB there is an entry in this list and when the HW DB
@@ -169,23 +161,11 @@ struct sparx5;
 struct sparx5_db {
 	struct list_head list;
 	void *cpu_addr;
-};
-
-struct sparx5_db_hw {
-	u64 dataptr;
-	u64 status;
-};
-
-struct sparx5_rx_dcb_hw {
-	u64 nextptr;
-	u64 info;
-	struct sparx5_db_hw db[FDMA_RX_DCB_MAX_DBS];
-};
-
-struct sparx5_tx_dcb_hw {
-	u64 nextptr;
-	u64 info;
-	struct sparx5_db_hw db[FDMA_TX_DCB_MAX_DBS];
+	bool used;
+	bool ptp;
+	dma_addr_t dma_addr;
+	int len;
+	struct sk_buff *skb;
 };
 
 /* Frame DMA receive state:
@@ -195,13 +175,9 @@ struct sparx5_tx_dcb_hw {
  * When the db_index reached FDMA_RX_DCB_MAX_DBS the DB is reused.
  */
 struct sparx5_rx {
-	struct sparx5_rx_dcb_hw *dcb_entries;
-	struct sparx5_rx_dcb_hw *last_entry;
-	int db_index;
-	int dcb_index;
-	dma_addr_t dma;
+	struct fdma *fdma;
+	struct page_pool *page_pool;
 	struct napi_struct napi;
-	u32 channel_id;
 	struct net_device *ndev;
 	u64 packets;
 	/* For each DB, there is a page */
@@ -219,11 +195,9 @@ struct sparx5_rx {
  * DCBs are chained using the DCBs nextptr field.
  */
 struct sparx5_tx {
-	struct sparx5_tx_dcb_hw *curr_entry;
-	struct sparx5_tx_dcb_hw *first_entry;
+	struct fdma *fdma;
+	struct sparx5_db *dbs;
 	struct list_head db_list;
-	dma_addr_t dma;
-	u32 channel_id;
 	u64 packets;
 	u64 dropped;
 	u16 max_mtu;
@@ -408,7 +382,7 @@ struct sparx5 {
 	int xtr_irq;
 	/* Frame DMA */
 	int fdma_irq;
-	spinlock_t tx_lock; /* lock for frame transmition */
+	spinlock_t tx_lock; /* lock for frame transmission */
 	struct sparx5_rx rx;
 	struct sparx5_tx tx;
 	/* PTP */
@@ -430,6 +404,12 @@ struct sparx5 {
 	/* Time Aware Shaper */
 	struct mutex tas_lock;
 	bool is_pcie_device;
+	/* L3 Forwarding */
+	struct sparx5_router *router;
+#ifdef CONFIG_MFD_LAN969X_PCI
+	/* fdma pci */
+	struct fdma_pci_atu atu;
+#endif
 };
 
 struct sparx5_calendar_data {
@@ -545,7 +525,8 @@ struct sparx5_consts {
 	int gate_cnt;
 	int lb_cnt;
 	int tod_pin;
-	int fdma_db_cnt;
+	int vmid_cnt;
+	int arp_tbl_cnt;
 	const struct sparx5_vcap_inst *vcaps_cfg;
 	const struct vcap_info *vcaps;
 	const struct vcap_statistics *vcap_stats;
@@ -607,17 +588,13 @@ irqreturn_t sparx5_fdma_handler(int irq, void *args);
 u32 sparx5_fdma_port_ctrl(struct sparx5 *sparx5);
 void sparx5_fdma_rx_activate(struct sparx5 *sparx5, struct sparx5_rx *rx);
 void sparx5_fdma_rx_deactivate(struct sparx5 *sparx5, struct sparx5_rx *rx);
-void sparx5_fdma_rx_reload(struct sparx5 *sparx5, struct sparx5_rx *rx);
 void sparx5_fdma_tx_activate(struct sparx5 *sparx5, struct sparx5_tx *tx);
 void sparx5_fdma_tx_deactivate(struct sparx5 *sparx5, struct sparx5_tx *tx);
-void sparx5_fdma_tx_reload(struct sparx5 *sparx5, struct sparx5_tx *tx);
-struct sparx5_tx_dcb_hw *sparx5_fdma_next_dcb(struct sparx5_tx *tx,
-					      struct sparx5_tx_dcb_hw *dcb);
 void sparx5_fdma_injection_mode(struct sparx5 *sparx5);
-void sparx5_fdma_rx_init(struct sparx5 *sparx5, struct sparx5_rx *rx,
-			 int channel);
-void sparx5_fdma_tx_init(struct sparx5 *sparx5, struct sparx5_tx *tx,
-			 int channel);
+int sparx5_fdma_get_mtu(struct sparx5 *sparx5);
+struct net_device *sparx5_fdma_get_ndev(struct sparx5 *sparx5);
+void sparx5_fdma_reload(struct sparx5 *sparx5, struct fdma *fdma);
+void sparx5_fdma_llp_configure(struct sparx5 *sparx5, u64 addr, u32 channel_id);
 
 /* sparx5_mactable.c */
 void sparx5_mact_pull_work(struct work_struct *work);
@@ -652,6 +629,43 @@ int sparx5_vlan_vid_add(struct sparx5_port *port, u16 vid, bool pvid,
 			bool untagged);
 int sparx5_vlan_vid_del(struct sparx5_port *port, u16 vid);
 void sparx5_vlan_port_apply(struct sparx5 *sparx5, struct sparx5_port *port);
+
+/* sparx5_router.c */
+int sparx5_rr_router_init(struct sparx5 *sparx5);
+void sparx5_rr_router_deinit(struct sparx5 *sparx5);
+
+struct sparx5_rr_hw_route {
+	u32 vrule_id;
+	bool vrule_id_valid;
+};
+
+struct sparx5_router {
+	struct sparx5 *sparx5;
+	struct notifier_block fib_nb;
+	struct notifier_block netevent_nb;
+	struct notifier_block inetaddr_nb;
+	struct notifier_block inetaddr_valid_nb;
+	struct notifier_block netdevice_nb;
+	struct notifier_block inet6addr_nb;
+	struct notifier_block inet6addr_valid_nb;
+	struct rhashtable neigh_ht;
+	struct rhashtable fib_ht;
+	struct sparx5_rr_hw_route link_local; /* Trap all link-local traffic. */
+	struct net_device *port_dev; /* For VCAP API. */
+
+	struct list_head fib_lpm4_list;
+	struct list_head fib_lpm6_list;
+	struct mutex lock; /* Global router lock for all shared data. */
+
+	struct workqueue_struct *sparx5_router_owq;
+
+	atomic_t legs_count;
+	struct list_head leg_list;
+	/* Track allocated router leg indices in hw */
+	DECLARE_BITMAP(vmid_mask, SPARX5_ROUTER_LEG_N_VMID);
+	/* Track allocated arp table indices in hw */
+	DECLARE_BITMAP(arp_tbl_mask, SPARX5_ARP_TBL_SIZE);
+};
 
 /* sparx5_calendar.c */
 int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
@@ -941,6 +955,7 @@ void sparx5_update_u64_counter(u64 *cntr, u32 msb, u32 lsb);
 
 /* sparx5_packet.c */
 u32 sparx5_get_packet_pipeline_pt(enum sparx5_packet_pipeline_pt pt);
+void sparx5_consume_skb(struct sk_buff *skb);
 
 /* Clock period in picoseconds */
 static inline u32 sparx5_clk_period(enum sparx5_core_clockfreq cclock)

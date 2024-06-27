@@ -80,62 +80,63 @@
 #define DPLL_OUTPUT_GPO_EN			0x724
 #define DPLL_OUTPUT_GPO_EN_SIZE			1
 
-#define ZL80732_1PPM_FORMAT		281474976
+#define ZL3073X_1PPM_FORMAT		281474976
 
-#define ZL80732_MAX_DPLLS		2
-#define ZL80732_MAX_OUTPUTS		20
+#define ZL3073X_MAX_DPLLS		2
+#define ZL3073X_MAX_OUTPUTS		20
 
 #define READ_SLEEP_US			10
 #define READ_TIMEOUT_US			100000000
 
-#define ZL80732_FW_FILENAME		"zl80732.mfg"
-#define ZL80732_FW_WHITESPACES_SIZE	3
-#define ZL80732_FW_COMMAND_SIZE		1
+#define ZL3073X_FW_FILENAME		"zl3073x.mfg"
+#define ZL3073X_FW_WHITESPACES_SIZE	3
+#define ZL3073X_FW_COMMAND_SIZE		1
 
-#define ZL80732_P_PIN(pin)		((pin) % 2 == 0)
-#define ZL80732_N_PIN(pin)		(!ZL80732_P_PIN(pin))
+#define ZL3073X_P_PIN(pin)		((pin) % 2 == 0)
+#define ZL3073X_N_PIN(pin)		(!ZL3073X_P_PIN(pin))
 
-static const struct of_device_id zl80732_match[] = {
+static const struct of_device_id zl3073x_match[] = {
 	{ .compatible = "microchip,zl80732-phc" },
+	{ .compatible = "microchip,zl30732b-phc" },
 	{ }
 };
-MODULE_DEVICE_TABLE(of, zl80732_match);
+MODULE_DEVICE_TABLE(of, zl3073x_match);
 
-enum zl80732_mode_t {
-	ZL80732_MODE_NCO			= 0x4,
+enum zl3073x_mode_t {
+	ZL3073X_MODE_NCO			= 0x4,
 };
 
-enum zl80732_tod_ctrl_cmd_t {
-	ZL80732_TOD_CTRL_CMD_WRITE_NEXT_1HZ	= 0x1,
-	ZL80732_TOD_CTRL_CMD_READ		= 0x8,
-	ZL80732_TOD_CTRL_CMD_READ_NEXT_1HZ	= 0x9,
+enum zl3073x_tod_ctrl_cmd_t {
+	ZL3073X_TOD_CTRL_CMD_WRITE_NEXT_1HZ	= 0x1,
+	ZL3073X_TOD_CTRL_CMD_READ		= 0x8,
+	ZL3073X_TOD_CTRL_CMD_READ_NEXT_1HZ	= 0x9,
 };
 
-enum zl80732_output_mode_signal_format_t {
-	ZL80732_BOTH_DISABLED			= 0x0,
-	ZL80732_BOTH_ENABLED			= 0x4,
-	ZL80732_P_ENABLE			= 0x5,
-	ZL80732_N_ENABLE			= 0x6,
+enum zl3073x_output_mode_signal_format_t {
+	ZL3073X_BOTH_DISABLED			= 0x0,
+	ZL3073X_BOTH_ENABLED			= 0x4,
+	ZL3073X_P_ENABLE			= 0x5,
+	ZL3073X_N_ENABLE			= 0x6,
 };
 
-struct zl80732_dpll {
-	struct zl80732		*zl80732;
+struct zl3073x_dpll {
+	struct zl3073x		*zl3073x;
 	u8			index;
 
 	struct ptp_clock_info	info;
 	struct ptp_clock	*clock;
-	struct ptp_pin_desc	pins[ZL80732_MAX_OUTPUTS];
+	struct ptp_pin_desc	pins[ZL3073X_MAX_OUTPUTS];
 
 	u16			perout_mask;
 };
 
-struct zl80732 {
+struct zl3073x {
 	struct device		*dev;
 	struct mutex		*lock;
 	struct regmap		*regmap;
 	struct device		*mfd;
 
-	struct zl80732_dpll	dpll[ZL80732_MAX_DPLLS];
+	struct zl3073x_dpll	dpll[ZL3073X_MAX_DPLLS];
 };
 
 /* When accessing the registers of the DPLL, it is always required to access
@@ -146,7 +147,7 @@ struct zl80732 {
  * datasheet.  This function was added for this purpose and it is used inside
  * the read and write functions.
  */
-static u8 *zl80732_swap(u8 *swap, u16 count)
+static u8 *zl3073x_swap(u8 *swap, u16 count)
 {
 	int i;
 
@@ -159,17 +160,17 @@ static u8 *zl80732_swap(u8 *swap, u16 count)
 	return swap;
 }
 
-static int zl80732_read(struct zl80732 *zl80732, u16 regaddr, u8 *buf, u16 count)
+static int zl3073x_read(struct zl3073x *zl3073x, u16 regaddr, u8 *buf, u16 count)
 {
-	return regmap_bulk_read(zl80732->regmap, regaddr, buf, count);
+	return regmap_bulk_read(zl3073x->regmap, regaddr, buf, count);
 }
 
-static int zl80732_write(struct zl80732 *zl80732, u16 regaddr, u8 *buf, u16 count)
+static int zl3073x_write(struct zl3073x *zl3073x, u16 regaddr, u8 *buf, u16 count)
 {
-	return regmap_bulk_write(zl80732->regmap, regaddr, zl80732_swap(buf, count), count);
+	return regmap_bulk_write(zl3073x->regmap, regaddr, zl3073x_swap(buf, count), count);
 }
 
-static void zl80732_ptp_timestamp_to_bytearray(const struct timespec64 *ts,
+static void zl3073x_ptp_timestamp_to_bytearray(const struct timespec64 *ts,
 					       u8 *sec, u8 *nsec)
 {
 	sec[0] = (ts->tv_sec >> 0) & 0xff;
@@ -187,7 +188,7 @@ static void zl80732_ptp_timestamp_to_bytearray(const struct timespec64 *ts,
 	nsec[5] = 0;
 }
 
-static void zl80732_ptp_bytearray_to_timestamp(struct timespec64 *ts,
+static void zl3073x_ptp_bytearray_to_timestamp(struct timespec64 *ts,
 					       u8 *sec, u8 *nsec)
 {
 	ts->tv_sec = sec[0];
@@ -205,47 +206,47 @@ static void zl80732_ptp_bytearray_to_timestamp(struct timespec64 *ts,
 	set_normalized_timespec64(ts, ts->tv_sec, ts->tv_nsec);
 }
 
-static int zl80732_ptp_tod_sem(struct zl80732_dpll *dpll)
+static int zl3073x_ptp_tod_sem(struct zl3073x_dpll *dpll)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 sem;
 
-	zl80732_read(zl80732, DPLL_TOD_CTRL(dpll->index), &sem, sizeof(sem));
+	zl3073x_read(zl3073x, DPLL_TOD_CTRL(dpll->index), &sem, sizeof(sem));
 	return sem;
 }
 
-static int zl80732_ptp_phase_ctrl_op(struct zl80732_dpll *dpll)
+static int zl3073x_ptp_phase_ctrl_op(struct zl3073x_dpll *dpll)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 ctrl;
 
-	zl80732_read(zl80732, DPLL_OUTPUT_PHASE_STEP_CTRL, &ctrl, sizeof(ctrl));
+	zl3073x_read(zl3073x, DPLL_OUTPUT_PHASE_STEP_CTRL, &ctrl, sizeof(ctrl));
 	return ctrl;
 }
 
-static int zl80732_ptp_synth_mb_sem(struct zl80732_dpll *dpll)
+static int zl3073x_ptp_synth_mb_sem(struct zl3073x_dpll *dpll)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 sem;
 
-	zl80732_read(zl80732, DPLL_SYNTH_MB_SEM, &sem, sizeof(sem));
+	zl3073x_read(zl3073x, DPLL_SYNTH_MB_SEM, &sem, sizeof(sem));
 	return sem;
 }
 
-static int zl80732_ptp_output_mb_sem(struct zl80732_dpll *dpll)
+static int zl3073x_ptp_output_mb_sem(struct zl3073x_dpll *dpll)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 sem;
 
-	zl80732_read(zl80732, DPLL_OUTPUT_MB_SEM, &sem, sizeof(sem));
+	zl3073x_read(zl3073x, DPLL_OUTPUT_MB_SEM, &sem, sizeof(sem));
 	return sem;
 }
 
-static int _zl80732_ptp_gettime64(struct zl80732_dpll *dpll,
+static int _zl3073x_ptp_gettime64(struct zl3073x_dpll *dpll,
 				  struct timespec64 *ts,
-				  enum zl80732_tod_ctrl_cmd_t cmd)
+				  enum zl3073x_tod_ctrl_cmd_t cmd)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 nsec[DPLL_TOD_NSEC_SIZE];
 	u8 sec[DPLL_TOD_SEC_SIZE];
 	int ret;
@@ -253,7 +254,7 @@ static int _zl80732_ptp_gettime64(struct zl80732_dpll *dpll,
 	u8 ctrl;
 
 	/* Check that the semaphore is clear */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_tod_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_tod_sem, dpll,
 					val, !(DPLL_TOD_CTRL_SEM & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
 	if (ret)
@@ -261,45 +262,45 @@ static int _zl80732_ptp_gettime64(struct zl80732_dpll *dpll,
 
 	/* Issue the read command */
 	ctrl = DPLL_TOD_CTRL_SEM | cmd;
-	zl80732_write(zl80732, DPLL_TOD_CTRL(dpll->index), &ctrl, sizeof(ctrl));
+	zl3073x_write(zl3073x, DPLL_TOD_CTRL(dpll->index), &ctrl, sizeof(ctrl));
 
 	/* Check that the semaphore is clear */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_tod_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_tod_sem, dpll,
 					val, !(DPLL_TOD_CTRL_SEM & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
 	if (ret)
 		return ret;;
 
 	/* Read the second and nanoseconds */
-	zl80732_read(zl80732, DPLL_TOD_SEC(dpll->index),
+	zl3073x_read(zl3073x, DPLL_TOD_SEC(dpll->index),
 		     sec, DPLL_TOD_SEC_SIZE);
-	zl80732_read(zl80732, DPLL_TOD_NSEC(dpll->index),
+	zl3073x_read(zl3073x, DPLL_TOD_NSEC(dpll->index),
 		     nsec, DPLL_TOD_NSEC_SIZE);
 
-	zl80732_ptp_bytearray_to_timestamp(ts, sec, nsec);
+	zl3073x_ptp_bytearray_to_timestamp(ts, sec, nsec);
 
 	return 0;
 }
 
-static int zl80732_ptp_gettime64(struct ptp_clock_info *ptp,
+static int zl3073x_ptp_gettime64(struct ptp_clock_info *ptp,
 				 struct timespec64 *ts)
 {
-	struct zl80732_dpll *dpll = container_of(ptp, struct zl80732_dpll, info);
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x_dpll *dpll = container_of(ptp, struct zl3073x_dpll, info);
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	int ret;
 
-	mutex_lock(zl80732->lock);
-	ret = _zl80732_ptp_gettime64(dpll, ts, ZL80732_TOD_CTRL_CMD_READ);
-	mutex_unlock(zl80732->lock);
+	mutex_lock(zl3073x->lock);
+	ret = _zl3073x_ptp_gettime64(dpll, ts, ZL3073X_TOD_CTRL_CMD_READ);
+	mutex_unlock(zl3073x->lock);
 
 	return ret;
 }
 
-static int _zl80732_ptp_settime64(struct zl80732_dpll *dpll,
+static int _zl3073x_ptp_settime64(struct zl3073x_dpll *dpll,
 				  const struct timespec64 *ts,
-				  enum zl80732_tod_ctrl_cmd_t cmd)
+				  enum zl3073x_tod_ctrl_cmd_t cmd)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 nsec[DPLL_TOD_NSEC_SIZE];
 	u8 sec[DPLL_TOD_SEC_SIZE];
 	int ret;
@@ -307,43 +308,43 @@ static int _zl80732_ptp_settime64(struct zl80732_dpll *dpll,
 	u8 ctrl;
 
 	/* Check that the semaphore is clear */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_tod_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_tod_sem, dpll,
 					val, !(DPLL_TOD_CTRL_SEM & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
 	if (ret)
 		return ret;
 
 	/* Convert input to something that DPLL can understand */
-	zl80732_ptp_timestamp_to_bytearray(ts, sec, nsec);
+	zl3073x_ptp_timestamp_to_bytearray(ts, sec, nsec);
 
 	/* Write the value */
-	zl80732_write(zl80732, DPLL_TOD_SEC(dpll->index),
+	zl3073x_write(zl3073x, DPLL_TOD_SEC(dpll->index),
 		      sec, DPLL_TOD_SEC_SIZE);
-	zl80732_write(zl80732, DPLL_TOD_NSEC(dpll->index),
+	zl3073x_write(zl3073x, DPLL_TOD_NSEC(dpll->index),
 		      nsec, DPLL_TOD_NSEC_SIZE);
 
 	/* Issue the write command */
 	ctrl = DPLL_TOD_CTRL_SEM | cmd;
-	zl80732_write(zl80732, DPLL_TOD_CTRL(dpll->index), &ctrl, sizeof(ctrl));
+	zl3073x_write(zl3073x, DPLL_TOD_CTRL(dpll->index), &ctrl, sizeof(ctrl));
 
 	return 0;
 }
 
-static int zl80732_ptp_settime64(struct ptp_clock_info *ptp,
+static int zl3073x_ptp_settime64(struct ptp_clock_info *ptp,
 				 const struct timespec64 *ts)
 {
-	struct zl80732_dpll *dpll = container_of(ptp, struct zl80732_dpll, info);
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x_dpll *dpll = container_of(ptp, struct zl3073x_dpll, info);
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	int ret;
 
-	mutex_lock(zl80732->lock);
-	ret = _zl80732_ptp_settime64(dpll, ts, ZL80732_TOD_CTRL_CMD_WRITE_NEXT_1HZ);
-	mutex_unlock(zl80732->lock);
+	mutex_lock(zl3073x->lock);
+	ret = _zl3073x_ptp_settime64(dpll, ts, ZL3073X_TOD_CTRL_CMD_WRITE_NEXT_1HZ);
+	mutex_unlock(zl3073x->lock);
 
 	return ret;
 }
 
-static int zl80732_ptp_wait_sec_rollover(struct zl80732_dpll *dpll)
+static int zl3073x_ptp_wait_sec_rollover(struct zl3073x_dpll *dpll)
 {
 	struct timespec64 init_ts, ts;
 	int val;
@@ -353,15 +354,15 @@ static int zl80732_ptp_wait_sec_rollover(struct zl80732_dpll *dpll)
 
 	do {
 		/* Check that the semaphore is clear */
-		ret = readx_poll_timeout_atomic(zl80732_ptp_tod_sem, dpll,
+		ret = readx_poll_timeout_atomic(zl3073x_ptp_tod_sem, dpll,
 						val, !(DPLL_TOD_CTRL_SEM & val),
 						READ_SLEEP_US, READ_TIMEOUT_US);
 		if (ret)
 			return ret;
 
 		/* Read the time */
-		ret = _zl80732_ptp_gettime64(dpll, &ts,
-					     ZL80732_TOD_CTRL_CMD_READ_NEXT_1HZ);
+		ret = _zl3073x_ptp_gettime64(dpll, &ts,
+					     ZL3073X_TOD_CTRL_CMD_READ_NEXT_1HZ);
 		if (ret)
 			return ret;
 
@@ -379,9 +380,9 @@ static int zl80732_ptp_wait_sec_rollover(struct zl80732_dpll *dpll)
 	return 0;
 }
 
-static s64 _zl80732_ptp_get_synth_freq(struct zl80732_dpll *dpll, u8 synth)
+static s64 _zl3073x_ptp_get_synth_freq(struct zl3073x_dpll *dpll, u8 synth)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u16 numerator;
 	u16 denomitor;
 	u8 buf[4];
@@ -393,17 +394,17 @@ static s64 _zl80732_ptp_get_synth_freq(struct zl80732_dpll *dpll, u8 synth)
 	/* Select the synth */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = BIT(synth);
-	zl80732_write(zl80732, DPLL_SYNTH_MB_MASK, buf,
+	zl3073x_write(zl3073x, DPLL_SYNTH_MB_MASK, buf,
 		      DPLL_SYNTH_MB_MASK_SIZE);
 
 	/* Select read command */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = DPLL_SYNTH_MB_SEM_RD;
-	zl80732_write(zl80732, DPLL_SYNTH_MB_SEM, buf,
+	zl3073x_write(zl3073x, DPLL_SYNTH_MB_SEM, buf,
 		      DPLL_SYNTH_MB_SEM_SIZE);
 
 	/* Wait for the command to actually finish */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_synth_mb_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_synth_mb_sem, dpll,
 					val,
 					!(DPLL_SYNTH_MB_SEM_RD & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
@@ -414,24 +415,24 @@ static s64 _zl80732_ptp_get_synth_freq(struct zl80732_dpll *dpll, u8 synth)
 	 * base * multiplier * numerator / denomitor
 	 * Therefore get all this number and calculate the output frequency
 	 */
-	zl80732_read(zl80732, DPLL_SYNTH_FREQ_BASE, buf,
+	zl3073x_read(zl3073x, DPLL_SYNTH_FREQ_BASE, buf,
 		     DPLL_SYNTH_FREQ_BASE_SIZE);
 	base = buf[0] << 8;
 	base |= buf[1];
 
-	zl80732_read(zl80732, DPLL_SYNTH_FREQ_MULT, buf,
+	zl3073x_read(zl3073x, DPLL_SYNTH_FREQ_MULT, buf,
 		     DPLL_SYNTH_FREQ_MULT_SIZE);
 	mult = buf[0] << 24;
 	mult |= buf[1] << 16;
 	mult |= buf[2] << 8;
 	mult |= buf[3];
 
-	zl80732_read(zl80732, DPLL_SYNTH_FREQ_M, buf,
+	zl3073x_read(zl3073x, DPLL_SYNTH_FREQ_M, buf,
 		     DPLL_SYNTH_FREQ_M_SIZE);
 	numerator = buf[0] << 8;
 	numerator |= buf[1];
 
-	zl80732_read(zl80732, DPLL_SYNTH_FREQ_N, buf,
+	zl3073x_read(zl3073x, DPLL_SYNTH_FREQ_N, buf,
 		     DPLL_SYNTH_FREQ_N_SIZE);
 	denomitor = buf[0] << 8;
 	denomitor |= buf[1];
@@ -439,9 +440,9 @@ static s64 _zl80732_ptp_get_synth_freq(struct zl80732_dpll *dpll, u8 synth)
 	return base * mult * numerator / denomitor;
 }
 
-static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
+static int _zl3073x_ptp_adjphase(struct zl3073x_dpll *dpll, const s64 delta)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	s32 register_units;
 	u8 buf[4];
 	u8 synth;
@@ -449,7 +450,7 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 	int ret;
 
 	/* Wait for the previous command to finish */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_phase_ctrl_op, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_phase_ctrl_op, dpll,
 					val,
 					!(DPLL_OUTPUT_PHASE_STEP_CTRL_OP_MASK & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
@@ -461,19 +462,19 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 	 */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = 1;
-	zl80732_write(zl80732, DPLL_OUTPUT_PHASE_STEP_NUMBER, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_PHASE_STEP_NUMBER, buf,
 		      DPLL_OUTPUT_PHASE_STEP_NUMBER_SIZE);
 
 	/* Get the synth that is connected to the output, it is OK to get the
 	 * synth for only 1 output as it is expected that all the outputs that
 	 * are used by 1PPS are connected to same synth.
 	 */
-	zl80732_read(zl80732, DPLL_OUTPUT_CTRL(__ffs(dpll->perout_mask)), buf,
+	zl3073x_read(zl3073x, DPLL_OUTPUT_CTRL(__ffs(dpll->perout_mask)), buf,
 		     DPLL_OUTPUT_CTRL_SIZE);
 	synth = DPLL_OUTPUT_CTRL_SYNTH_SEL_GET(buf[0]);
 
 	/* Configure the step */
-	register_units = div_s64(delta * _zl80732_ptp_get_synth_freq(dpll, synth),
+	register_units = div_s64(delta * _zl3073x_ptp_get_synth_freq(dpll, synth),
 				 NSEC_PER_SEC);
 
 	memset(buf, 0, sizeof(buf));
@@ -481,13 +482,13 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 	buf[1] = (register_units >> 8) & 0xff;
 	buf[2] = (register_units >> 16) & 0xff;
 	buf[3] = (register_units >> 24) & 0xff;
-	zl80732_write(zl80732, DPLL_OUTPUT_PHASE_STEP_DATA, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_PHASE_STEP_DATA, buf,
 		      DPLL_OUTPUT_PHASE_STEP_DATA_SIZE);
 
 	/* Select which output should be adjusted */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = dpll->perout_mask;
-	zl80732_write(zl80732, DPLL_OUTPUT_PHASE_STEP_MASK, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_PHASE_STEP_MASK, buf,
 		      DPLL_OUTPUT_PHASE_STEP_MASK_SIZE);
 
 	/* Start the phase adjustment on the output pin and also on the ToD */
@@ -496,59 +497,59 @@ static int _zl80732_ptp_adjphase(struct zl80732_dpll *dpll, const s64 delta)
 		 DPLL_OUTPUT_PHASE_STEP_CTRL_OP(DPLL_OUTPUT_PAHSE_STEP_CTRL_OP_WRITE) |
 		 DPLL_OUTPUT_PHASE_STEP_CTRL_TOD_STEP;
 
-	zl80732_write(zl80732, DPLL_OUTPUT_PHASE_STEP_CTRL, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_PHASE_STEP_CTRL, buf,
 		      DPLL_OUTPUT_PHASE_STEP_CTRL_SIZE);
 
 	return 0;
 }
 
-static void zl80732_ptp_stop_1pps(struct zl80732_dpll *dpll)
+static void zl3073x_ptp_stop_1pps(struct zl3073x_dpll *dpll)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 buf;
 
-	for (size_t i = 0; i < ZL80732_MAX_OUTPUTS; ++i) {
+	for (size_t i = 0; i < ZL3073X_MAX_OUTPUTS; ++i) {
 		if (!(BIT(i) & dpll->perout_mask))
 			continue;
 
-		zl80732_read(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+		zl3073x_read(zl3073x, DPLL_OUTPUT_CTRL(i), &buf,
 			     DPLL_OUTPUT_CTRL_SIZE);
 		buf |= DPLL_OUTPUT_CTRL_STOP;
 
 		buf &= ~(DPLL_OUTPUT_CTRL_STOP_HZ &
 			 DPLL_OUTPUT_CTRL_STOP_HIGH);
 
-		zl80732_write(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+		zl3073x_write(zl3073x, DPLL_OUTPUT_CTRL(i), &buf,
 			      DPLL_OUTPUT_CTRL_SIZE);
 	}
 }
 
-static void zl80732_ptp_start_1pps(struct zl80732_dpll *dpll)
+static void zl3073x_ptp_start_1pps(struct zl3073x_dpll *dpll)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 buf;
 
-	for (size_t i = 0; i < ZL80732_MAX_OUTPUTS; ++i) {
+	for (size_t i = 0; i < ZL3073X_MAX_OUTPUTS; ++i) {
 		if (!(BIT(i) & dpll->perout_mask))
 			continue;
 
-		zl80732_read(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+		zl3073x_read(zl3073x, DPLL_OUTPUT_CTRL(i), &buf,
 			     DPLL_OUTPUT_CTRL_SIZE);
 		buf &= ~DPLL_OUTPUT_CTRL_STOP;
 
-		zl80732_write(zl80732, DPLL_OUTPUT_CTRL(i), &buf,
+		zl3073x_write(zl3073x, DPLL_OUTPUT_CTRL(i), &buf,
 			      DPLL_OUTPUT_CTRL_SIZE);
 	}
 }
 
-static int zl80732_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
+static int zl3073x_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
 {
-	struct zl80732_dpll *dpll = container_of(ptp, struct zl80732_dpll, info);
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x_dpll *dpll = container_of(ptp, struct zl3073x_dpll, info);
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	struct timespec64 ts;
 	int ret;
 
-	mutex_lock(zl80732->lock);
+	mutex_lock(zl3073x->lock);
 
 	/* When adjusting the time and having a 1PPS enabled then it is the 1PPS
 	 * will come more often then 1 per second and this might introduce
@@ -559,53 +560,59 @@ static int zl80732_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
 	 * the listeners of the 1PPS will not see multiple signals.
 	 */
 	if (dpll->perout_mask)
-		zl80732_ptp_stop_1pps(dpll);
+		zl3073x_ptp_stop_1pps(dpll);
 
 	if (delta >= NSEC_PER_SEC || delta <= -NSEC_PER_SEC) {
 		/* wait for rollover */
-		ret = zl80732_ptp_wait_sec_rollover(dpll);
+		ret = zl3073x_ptp_wait_sec_rollover(dpll);
 		if (ret)
 			goto out;
 
 		/* get the predicted TOD at the next internal 1PPS */
-		ret = _zl80732_ptp_gettime64(dpll, &ts,
-					     ZL80732_TOD_CTRL_CMD_READ_NEXT_1HZ);
+		ret = _zl3073x_ptp_gettime64(dpll, &ts,
+					     ZL3073X_TOD_CTRL_CMD_READ_NEXT_1HZ);
 		if (ret)
 			goto out;
 
 		ts = timespec64_add(ts, ns_to_timespec64(delta));
 
-		ret = _zl80732_ptp_settime64(dpll, &ts,
-					     ZL80732_TOD_CTRL_CMD_WRITE_NEXT_1HZ);
+		ret = _zl3073x_ptp_settime64(dpll, &ts,
+					     ZL3073X_TOD_CTRL_CMD_WRITE_NEXT_1HZ);
 		if (ret)
 			goto out;
 	} else {
-		ret = _zl80732_ptp_adjphase(dpll, delta);
+		ret = _zl3073x_ptp_adjphase(dpll, delta);
 	}
 
 out:
 	if (dpll->perout_mask)
 		ptp_schedule_worker(dpll->clock, nsecs_to_jiffies(1 * NSEC_PER_SEC));
 
-	mutex_unlock(zl80732->lock);
+	mutex_unlock(zl3073x->lock);
 
 	return ret;
 }
 
-static int zl80732_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
+static int zl3073x_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 {
-	struct zl80732_dpll *dpll = container_of(ptp, struct zl80732_dpll, info);
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x_dpll *dpll = container_of(ptp, struct zl3073x_dpll, info);
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 dco[6];
 	s64 ref;
+	s64 ppm;
 
-	if (!scaled_ppm)
+	/* Store the scaled_ppm into a s64 variable because on 32bit arch, the
+	 * multiplication with ZL30373X_1PPM_FORMAT with overflow meaning that
+	 * will not be able to adjust to lowest ns
+	 */
+	ppm = scaled_ppm;
+	if (!ppm)
 		return 0;
 
-	mutex_lock(zl80732->lock);
+	mutex_lock(zl3073x->lock);
 
-	ref = ZL80732_1PPM_FORMAT * (scaled_ppm >> 16);
-	ref += (ZL80732_1PPM_FORMAT * (0xffff & scaled_ppm)) >> 16;
+	ref = ZL3073X_1PPM_FORMAT * (ppm >> 16);
+	ref += (ZL3073X_1PPM_FORMAT * (0xffff & ppm)) >> 16;
 
 	/* The value that is written in HW is in 2 complement */
 	ref = ~ref + 1;
@@ -617,42 +624,42 @@ static int zl80732_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 	dco[1] = ref >>  8;
 	dco[0] = ref >>  0;
 
-	zl80732_write(zl80732, DPLL_DF_OFFSET(dpll->index), dco, sizeof(dco));
+	zl3073x_write(zl3073x, DPLL_DF_OFFSET(dpll->index), dco, sizeof(dco));
 
-	mutex_unlock(zl80732->lock);
+	mutex_unlock(zl3073x->lock);
 
 	return 0;
 }
 
-static enum zl80732_output_mode_signal_format_t
-_zl80732_ptp_disable_pin(enum zl80732_output_mode_signal_format_t current_mode,
+static enum zl3073x_output_mode_signal_format_t
+_zl3073x_ptp_disable_pin(enum zl3073x_output_mode_signal_format_t current_mode,
 			 u8 pin)
 {
 	switch (current_mode) {
-	case ZL80732_P_ENABLE:
-		if (ZL80732_P_PIN(pin))
-			return ZL80732_BOTH_DISABLED;
+	case ZL3073X_P_ENABLE:
+		if (ZL3073X_P_PIN(pin))
+			return ZL3073X_BOTH_DISABLED;
 		break;
-	case ZL80732_N_ENABLE:
-		if (ZL80732_N_PIN(pin))
-			return ZL80732_BOTH_DISABLED;
+	case ZL3073X_N_ENABLE:
+		if (ZL3073X_N_PIN(pin))
+			return ZL3073X_BOTH_DISABLED;
 		break;
-	case ZL80732_BOTH_ENABLED:
-		if (ZL80732_P_PIN(pin))
-			return ZL80732_N_ENABLE;
+	case ZL3073X_BOTH_ENABLED:
+		if (ZL3073X_P_PIN(pin))
+			return ZL3073X_N_ENABLE;
 		else
-			return ZL80732_P_ENABLE;
+			return ZL3073X_P_ENABLE;
 	default:
-		return ZL80732_BOTH_DISABLED;
+		return ZL3073X_BOTH_DISABLED;
 	}
 
-	return ZL80732_BOTH_DISABLED;
+	return ZL3073X_BOTH_DISABLED;
 }
 
-static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
+static int zl3073x_ptp_perout_disable(struct zl3073x_dpll *dpll,
 				      struct ptp_perout_request *perout)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 buf[2];
 	int pin;
 	int ret;
@@ -660,23 +667,23 @@ static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
 	u8 mode;
 
 	pin = ptp_find_pin(dpll->clock, PTP_PF_PEROUT, perout->index);
-	if (pin == -1 || pin >= ZL80732_MAX_OUTPUTS)
+	if (pin == -1 || pin >= ZL3073X_MAX_OUTPUTS)
 		return -EINVAL;
 
 	/* Select the output pin */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = BIT(pin / 2);
-	zl80732_write(zl80732, DPLL_OUTPUT_MB_MASK, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MB_MASK, buf,
 		      DPLL_OUTPUT_MB_MASK_SIZE);
 
 	/* Select read command  */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = DPLL_OUTPUT_MB_SEM_RD;
-	zl80732_write(zl80732, DPLL_OUTPUT_MB_SEM, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MB_SEM, buf,
 		      DPLL_OUTPUT_MB_SEM_SIZE);
 
 	/* Wait for the command to actually finish */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_output_mb_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_output_mb_sem, dpll,
 					val,
 					!(DPLL_OUTPUT_MB_SEM_RD & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
@@ -684,26 +691,26 @@ static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
 		return ret;
 
 	/* Read current configuration */
-	zl80732_read(zl80732, DPLL_OUTPUT_MODE, buf,
+	zl3073x_read(zl3073x, DPLL_OUTPUT_MODE, buf,
 		     DPLL_OUTPUT_MODE_SIZE);
 
 	mode = DPLL_OUTPUT_MODE_SIGNAL_FORMAT_GET(buf[0]);
 	buf[0] &= ~DPLL_OUTPUT_MODE_SIGNAL_FORMAT_MASK;
-	buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(_zl80732_ptp_disable_pin(mode,
+	buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(_zl3073x_ptp_disable_pin(mode,
 									  pin));
 
 	/* Update the configuration */
-	zl80732_write(zl80732, DPLL_OUTPUT_MODE, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MODE, buf,
 		      DPLL_OUTPUT_MODE_SIZE);
 
 	/* Select write command */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = DPLL_OUTPUT_MB_SEM_WR;
-	zl80732_write(zl80732, DPLL_OUTPUT_MB_SEM, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MB_SEM, buf,
 		      DPLL_OUTPUT_MB_SEM_SIZE);
 
 	/* Wait for the command to actually finish */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_output_mb_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_output_mb_sem, dpll,
 					val,
 					!(DPLL_OUTPUT_MB_SEM_WR & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
@@ -715,35 +722,35 @@ static int zl80732_ptp_perout_disable(struct zl80732_dpll *dpll,
 	return 0;
 }
 
-static enum zl80732_output_mode_signal_format_t
-_zl80732_ptp_enable_pin(enum zl80732_output_mode_signal_format_t current_mode,
+static enum zl3073x_output_mode_signal_format_t
+_zl3073x_ptp_enable_pin(enum zl3073x_output_mode_signal_format_t current_mode,
 			u8 pin)
 {
 	switch (current_mode) {
-	case ZL80732_P_ENABLE:
-		if (ZL80732_N_PIN(pin))
-			return ZL80732_BOTH_ENABLED;
+	case ZL3073X_P_ENABLE:
+		if (ZL3073X_N_PIN(pin))
+			return ZL3073X_BOTH_ENABLED;
 		break;
-	case ZL80732_N_ENABLE:
-		if (ZL80732_P_PIN(pin))
-			return ZL80732_BOTH_ENABLED;
+	case ZL3073X_N_ENABLE:
+		if (ZL3073X_P_PIN(pin))
+			return ZL3073X_BOTH_ENABLED;
 		break;
-	case ZL80732_BOTH_DISABLED:
-		if (ZL80732_P_PIN(pin))
-			return ZL80732_P_ENABLE;
+	case ZL3073X_BOTH_DISABLED:
+		if (ZL3073X_P_PIN(pin))
+			return ZL3073X_P_ENABLE;
 		else
-			return ZL80732_N_ENABLE;
+			return ZL3073X_N_ENABLE;
 	default:
-		return ZL80732_BOTH_ENABLED;
+		return ZL3073X_BOTH_ENABLED;
 	}
 
-	return ZL80732_BOTH_ENABLED;
+	return ZL3073X_BOTH_ENABLED;
 }
 
-static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
+static int zl3073x_ptp_perout_enable(struct zl3073x_dpll *dpll,
 				     struct ptp_perout_request *perout)
 {
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	u8 buf[4];
 	u32 width;
 	u32 freq;
@@ -754,23 +761,23 @@ static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
 	u8 mode;
 
 	pin = ptp_find_pin(dpll->clock, PTP_PF_PEROUT, perout->index);
-	if (pin == -1 || pin >= ZL80732_MAX_OUTPUTS)
+	if (pin == -1 || pin >= ZL3073X_MAX_OUTPUTS)
 		return -EINVAL;
 
 	/* Select the output pin */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = BIT(pin / 2);
-	zl80732_write(zl80732, DPLL_OUTPUT_MB_MASK, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MB_MASK, buf,
 		      DPLL_OUTPUT_MB_MASK_SIZE);
 
 	/* Select read command  */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = DPLL_OUTPUT_MB_SEM_RD;
-	zl80732_write(zl80732, DPLL_OUTPUT_MB_SEM, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MB_SEM, buf,
 		      DPLL_OUTPUT_MB_SEM_SIZE);
 
 	/* Wait for the command to actually finish */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_output_mb_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_output_mb_sem, dpll,
 					val,
 					!(DPLL_OUTPUT_MB_SEM_RD & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
@@ -778,36 +785,36 @@ static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
 		return ret;
 
 	/* Read configuration of output mode */
-	zl80732_read(zl80732, DPLL_OUTPUT_MODE, buf,
+	zl3073x_read(zl3073x, DPLL_OUTPUT_MODE, buf,
 		     DPLL_OUTPUT_MODE_SIZE);
 
 	mode = DPLL_OUTPUT_MODE_SIGNAL_FORMAT_GET(buf[0]);
 	buf[0] &= ~DPLL_OUTPUT_MODE_SIGNAL_FORMAT_MASK;
-	buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(_zl80732_ptp_enable_pin(mode,
+	buf[0] |= DPLL_OUTPUT_MODE_SIGNAL_FORMAT(_zl3073x_ptp_enable_pin(mode,
 									 pin));
 
 	/* Update the configuration */
-	zl80732_write(zl80732, DPLL_OUTPUT_MODE, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MODE, buf,
 		      DPLL_OUTPUT_MODE_SIZE);
 
 	/* Make sure that the output is set as clock and not GPIO */
 	buf[0] = 0x0;
-	zl80732_write(zl80732, DPLL_OUTPUT_GPO_EN, buf, DPLL_OUTPUT_GPO_EN_SIZE);
+	zl3073x_write(zl3073x, DPLL_OUTPUT_GPO_EN, buf, DPLL_OUTPUT_GPO_EN_SIZE);
 
 	/* Get the synth that is connected to the output and set the same value
 	 * in the ouput divider of the pin so it can get an 1PPS as this is the
 	 * only value supported
 	 */
-	zl80732_read(zl80732, DPLL_OUTPUT_CTRL(pin / 2), buf,
+	zl3073x_read(zl3073x, DPLL_OUTPUT_CTRL(pin / 2), buf,
 		     DPLL_OUTPUT_CTRL_SIZE);
 	synth = DPLL_OUTPUT_CTRL_SYNTH_SEL_GET(buf[0]);
-	freq = _zl80732_ptp_get_synth_freq(dpll, synth);
+	freq = _zl3073x_ptp_get_synth_freq(dpll, synth);
 	memset(buf, 0, sizeof(buf));
 	buf[3] = (freq >> 24) & 0xff;
 	buf[2] = (freq >> 16) & 0xff;
 	buf[1] = (freq >>  8) & 0xff;
 	buf[0] = freq & 0xff;
-	zl80732_write(zl80732, DPLL_OUTPUT_DIV, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_DIV, buf,
 		      DPLL_OUTPUT_DIV_SIZE);
 
 	if (perout->flags & PTP_PEROUT_DUTY_CYCLE) {
@@ -829,18 +836,18 @@ static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
 		buf[2] = (width >> 16) & 0xff;
 		buf[1] = (width >>  8) & 0xff;
 		buf[0] = width & 0xff;
-		zl80732_write(zl80732, DPLL_OUTPUT_WIDTH, buf,
+		zl3073x_write(zl3073x, DPLL_OUTPUT_WIDTH, buf,
 			      DPLL_OUTPUT_WIDTH_SIZE);
 	}
 
 	/* Select write command */
 	memset(buf, 0, sizeof(buf));
 	buf[0] = DPLL_OUTPUT_MB_SEM_WR;
-	zl80732_write(zl80732, DPLL_OUTPUT_MB_SEM, buf,
+	zl3073x_write(zl3073x, DPLL_OUTPUT_MB_SEM, buf,
 		      DPLL_OUTPUT_MB_SEM_SIZE);
 
 	/* Wait for the command to actually finish */
-	ret = readx_poll_timeout_atomic(zl80732_ptp_output_mb_sem, dpll,
+	ret = readx_poll_timeout_atomic(zl3073x_ptp_output_mb_sem, dpll,
 					val,
 					!(DPLL_OUTPUT_MB_SEM_WR & val),
 					READ_SLEEP_US, READ_TIMEOUT_US);
@@ -852,25 +859,25 @@ static int zl80732_ptp_perout_enable(struct zl80732_dpll *dpll,
 	return 0;
 }
 
-static int zl80732_ptp_enable(struct ptp_clock_info *ptp,
+static int zl3073x_ptp_enable(struct ptp_clock_info *ptp,
 			      struct ptp_clock_request *rq, int on)
 {
-	struct zl80732_dpll *dpll = container_of(ptp, struct zl80732_dpll, info);
-	struct zl80732 *zl80732 = dpll->zl80732;
+	struct zl3073x_dpll *dpll = container_of(ptp, struct zl3073x_dpll, info);
+	struct zl3073x *zl3073x = dpll->zl3073x;
 	int err;
 
 	switch (rq->type) {
 	case PTP_CLK_REQ_PEROUT:
-		mutex_lock(zl80732->lock);
+		mutex_lock(zl3073x->lock);
 		if (!on)
-			err = zl80732_ptp_perout_disable(dpll, &rq->perout);
+			err = zl3073x_ptp_perout_disable(dpll, &rq->perout);
 		/* Only accept a 1-PPS aligned to the second. */
 		else if (rq->perout.start.nsec || rq->perout.period.sec != 1 ||
 			 rq->perout.period.nsec)
 			err = -ERANGE;
 		else
-			err = zl80732_ptp_perout_enable(dpll, &rq->perout);
-		mutex_unlock(zl80732->lock);
+			err = zl3073x_ptp_perout_enable(dpll, &rq->perout);
+		mutex_unlock(zl3073x->lock);
 		break;
 	default:
 		return -1;
@@ -879,7 +886,7 @@ static int zl80732_ptp_enable(struct ptp_clock_info *ptp,
 	return err;
 }
 
-static int zl80732_ptp_verify(struct ptp_clock_info *ptp, unsigned int pin,
+static int zl3073x_ptp_verify(struct ptp_clock_info *ptp, unsigned int pin,
 			      enum ptp_pin_function func, unsigned int chan)
 {
 	switch (func) {
@@ -893,37 +900,37 @@ static int zl80732_ptp_verify(struct ptp_clock_info *ptp, unsigned int pin,
 	return 0;
 }
 
-static long zl80732_ptp_do_aux_work(struct ptp_clock_info *ptp)
+static long zl3073x_ptp_do_aux_work(struct ptp_clock_info *ptp)
 {
-	struct zl80732_dpll *dpll = container_of(ptp, struct zl80732_dpll, info);
+	struct zl3073x_dpll *dpll = container_of(ptp, struct zl3073x_dpll, info);
 
 	if (dpll->perout_mask)
-		zl80732_ptp_start_1pps(dpll);
+		zl3073x_ptp_start_1pps(dpll);
 
 	return -1;
 }
 
-static struct ptp_clock_info zl80732_ptp_clock_info = {
+static struct ptp_clock_info zl3073x_ptp_clock_info = {
 	.owner		= THIS_MODULE,
-	.name		= "zl80732 ptp",
+	.name		= "zl3073x ptp",
 	.max_adj	= 1000000000,
-	.gettime64	= zl80732_ptp_gettime64,
-	.settime64	= zl80732_ptp_settime64,
-	.adjtime	= zl80732_ptp_adjtime,
-	.adjfine	= zl80732_ptp_adjfine,
-	.enable		= zl80732_ptp_enable,
-	.verify		= zl80732_ptp_verify,
-	.do_aux_work	= zl80732_ptp_do_aux_work,
-	.n_per_out	= ZL80732_MAX_OUTPUTS,
-	.n_ext_ts	= ZL80732_MAX_OUTPUTS,
-	.n_pins		= ZL80732_MAX_OUTPUTS,
+	.gettime64	= zl3073x_ptp_gettime64,
+	.settime64	= zl3073x_ptp_settime64,
+	.adjtime	= zl3073x_ptp_adjtime,
+	.adjfine	= zl3073x_ptp_adjfine,
+	.enable		= zl3073x_ptp_enable,
+	.verify		= zl3073x_ptp_verify,
+	.do_aux_work	= zl3073x_ptp_do_aux_work,
+	.n_per_out	= ZL3073X_MAX_OUTPUTS,
+	.n_ext_ts	= ZL3073X_MAX_OUTPUTS,
+	.n_pins		= ZL3073X_MAX_OUTPUTS,
 };
 
-static int zl80732_ptp_init(struct zl80732 *zl80732, u8 index)
+static int zl3073x_ptp_init(struct zl3073x *zl3073x, u8 index)
 {
-	struct zl80732_dpll *dpll = &zl80732->dpll[index];
+	struct zl3073x_dpll *dpll = &zl3073x->dpll[index];
 
-	for (int i = 0; i < ZL80732_MAX_OUTPUTS; i++) {
+	for (int i = 0; i < ZL3073X_MAX_OUTPUTS; i++) {
 		struct ptp_pin_desc *p = &dpll->pins[i];
 
 		snprintf(p->name, sizeof(p->name), "pin%d", i);
@@ -933,17 +940,17 @@ static int zl80732_ptp_init(struct zl80732 *zl80732, u8 index)
 	}
 
 	dpll->index = index;
-	dpll->zl80732 = zl80732;
-	dpll->info = zl80732_ptp_clock_info;
+	dpll->zl3073x = zl3073x;
+	dpll->info = zl3073x_ptp_clock_info;
 	dpll->info.pin_config = dpll->pins;
-	dpll->clock = ptp_clock_register(&dpll->info, zl80732->dev);
+	dpll->clock = ptp_clock_register(&dpll->info, zl3073x->dev);
 	if (IS_ERR(dpll->clock))
 		return PTR_ERR(dpll->clock);
 
 	return 0;
 }
 
-static const char *_zl80732_firmware_get_line(const char *data,
+static const char *_zl3073x_firmware_get_line(const char *data,
 					      size_t line_number)
 {
 	for (int i = 0; i < line_number; ++i) {
@@ -956,7 +963,7 @@ static const char *_zl80732_firmware_get_line(const char *data,
 	return data;
 }
 
-static int _zl80732_firmware_parse_line(struct zl80732 *zl80732,
+static int _zl3073x_firmware_parse_line(struct zl3073x *zl3073x,
 					const char *line)
 {
 	const char *tmp = line;
@@ -966,6 +973,7 @@ static int _zl80732_firmware_parse_line(struct zl80732 *zl80732,
 	u32 delay;
 	u16 addr;
 
+	mutex_lock(zl3073x->lock);
 	switch (tmp[0]) {
 	case 'X':
 		/* The line looks like this:
@@ -977,16 +985,16 @@ static int _zl80732_firmware_parse_line(struct zl80732 *zl80732,
 		 *  - VAL represents the value that is written and is always 1
 		 *        byte and the value is in hex, for example 0x12
 		 */
-		tmp += ZL80732_FW_COMMAND_SIZE;
+		tmp += ZL3073X_FW_COMMAND_SIZE;
 
-		tmp += ZL80732_FW_WHITESPACES_SIZE;
+		tmp += ZL3073X_FW_WHITESPACES_SIZE;
 		addr = simple_strtoul(tmp, &endp, 16);
 
 		tmp = endp;
-		tmp += ZL80732_FW_WHITESPACES_SIZE;
+		tmp += ZL3073X_FW_WHITESPACES_SIZE;
 		val = simple_strtoul(tmp, &endp, 16);
 
-		err = zl80732_write(zl80732, addr, &val, 1);
+		err = zl3073x_write(zl3073x, addr, &val, 1);
 		break;
 	case 'W':
 		/* The line looks like this:
@@ -996,9 +1004,9 @@ static int _zl80732_firmware_parse_line(struct zl80732 *zl80732,
 		 *  - DELAY represents the delay in microseconds and the value
 		 *    is in decimal
 		 */
-		tmp += ZL80732_FW_COMMAND_SIZE;
+		tmp += ZL3073X_FW_COMMAND_SIZE;
 
-		tmp += ZL80732_FW_WHITESPACES_SIZE;
+		tmp += ZL3073X_FW_WHITESPACES_SIZE;
 		delay = simple_strtoul(tmp, &endp, 10);
 
 		usleep_range(delay / 2, delay);
@@ -1006,24 +1014,25 @@ static int _zl80732_firmware_parse_line(struct zl80732 *zl80732,
 	default:
 		break;
 	}
+	mutex_unlock(zl3073x->lock);
 
 	return err;
 }
 
-static int zl80732_firmware_load(struct zl80732 *zl80732)
+static int zl3073x_firmware_load(struct zl3073x *zl3073x)
 {
-	char fname[128] = ZL80732_FW_FILENAME;
+	char fname[128] = ZL3073X_FW_FILENAME;
 	const struct firmware *fw;
 	size_t line_number = 0;
 	const char *line;
 	int err = 0;
 
-	err = request_firmware(&fw, fname, zl80732->dev);
+	err = request_firmware(&fw, fname, zl3073x->dev);
 	if (err)
 		return err;
 
 	while (true) {
-		line = _zl80732_firmware_get_line(fw->data, line_number);
+		line = _zl3073x_firmware_get_line(fw->data, line_number);
 		if (!line)
 			goto out;
 
@@ -1033,7 +1042,7 @@ static int zl80732_firmware_load(struct zl80732 *zl80732)
 		if (line[0] == ';')
 			continue;
 
-		err = _zl80732_firmware_parse_line(zl80732, line);
+		err = _zl3073x_firmware_parse_line(zl3073x, line);
 		if (err)
 			goto out;
 	}
@@ -1043,69 +1052,69 @@ out:
 	return err;
 }
 
-static bool zl80732_dpll_nco_mode(struct zl80732 *zl80732, int dpll_index)
+static bool zl3073x_dpll_nco_mode(struct zl3073x *zl3073x, int dpll_index)
 {
 	u8 mode;
 
-	zl80732_read(zl80732, DPLL_MODE_REFSEL(dpll_index), &mode, sizeof(mode));
-	return DPLL_MODE_REFSEL_MODE_GET(mode) == ZL80732_MODE_NCO;
+	zl3073x_read(zl3073x, DPLL_MODE_REFSEL(dpll_index), &mode, sizeof(mode));
+	return DPLL_MODE_REFSEL_MODE_GET(mode) == ZL3073X_MODE_NCO;
 }
 
-static int zl80732_probe(struct platform_device *pdev)
+static int zl3073x_probe(struct platform_device *pdev)
 {
 	struct microchip_dpll_ddata *ddata = dev_get_drvdata(pdev->dev.parent);
-	struct zl80732 *zl80732;
+	struct zl3073x *zl3073x;
 	int err;
 
-	zl80732 = devm_kzalloc(&pdev->dev, sizeof(struct zl80732), GFP_KERNEL);
-	if (!zl80732)
+	zl3073x = devm_kzalloc(&pdev->dev, sizeof(struct zl3073x), GFP_KERNEL);
+	if (!zl3073x)
 		return -ENOMEM;
 
-	zl80732->dev = &pdev->dev;
-	zl80732->mfd = pdev->dev.parent;
-	zl80732->lock = &ddata->lock;
-	zl80732->regmap = ddata->regmap;
+	zl3073x->dev = &pdev->dev;
+	zl3073x->mfd = pdev->dev.parent;
+	zl3073x->lock = &ddata->lock;
+	zl3073x->regmap = ddata->regmap;
 
-	zl80732_firmware_load(zl80732);
+	zl3073x_firmware_load(zl3073x);
 
-	for (size_t i = 0; i < ZL80732_MAX_DPLLS; ++i) {
-		if (!zl80732_dpll_nco_mode(zl80732, i))
+	for (size_t i = 0; i < ZL3073X_MAX_DPLLS; ++i) {
+		if (!zl3073x_dpll_nco_mode(zl3073x, i))
 			continue;
 
-		err = zl80732_ptp_init(zl80732, i);
+		err = zl3073x_ptp_init(zl3073x, i);
 		if (err)
 			return err;
 	}
 
-	platform_set_drvdata(pdev, zl80732);
+	platform_set_drvdata(pdev, zl3073x);
 
 	return 0;
 }
 
-static int zl80732_remove(struct platform_device *pdev)
+static int zl3073x_remove(struct platform_device *pdev)
 {
-	struct zl80732 *zl80732 = platform_get_drvdata(pdev);
+	struct zl3073x *zl3073x = platform_get_drvdata(pdev);
 
-	for (int i = 0; i < ZL80732_MAX_DPLLS; ++i) {
-		if (!zl80732_dpll_nco_mode(zl80732, i))
+	for (int i = 0; i < ZL3073X_MAX_DPLLS; ++i) {
+		if (!zl3073x_dpll_nco_mode(zl3073x, i))
 			continue;
 
-		ptp_clock_unregister(zl80732->dpll[i].clock);
+		ptp_clock_unregister(zl3073x->dpll[i].clock);
 	}
 
 	return 0;
 }
 
-static struct platform_driver zl80732_driver = {
+static struct platform_driver zl3073x_driver = {
 	.driver = {
-		.name = "microchip,zl80732-phc",
-		.of_match_table = zl80732_match,
+		.name = "microchip,zl3073x-phc",
+		.of_match_table = zl3073x_match,
 	},
-	.probe = zl80732_probe,
-	.remove	= zl80732_remove,
+	.probe = zl3073x_probe,
+	.remove	= zl3073x_remove,
 };
 
-module_platform_driver(zl80732_driver);
+module_platform_driver(zl3073x_driver);
 
-MODULE_DESCRIPTION("Driver for zl80732 clock devices");
+MODULE_DESCRIPTION("Driver for zl3073x clock devices");
 MODULE_LICENSE("GPL");

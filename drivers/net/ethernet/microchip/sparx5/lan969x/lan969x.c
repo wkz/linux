@@ -9,6 +9,7 @@
 static const struct sparx5_main_io_resource lan969x_main_iomap[] =  {
 	{ TARGET_CPU,                   0xc0000, 0 }, /* 0xe00c0000 */
 	{ TARGET_FDMA,                  0xc0400, 0 }, /* 0xe00c0400 */
+	{ TARGET_PCIE_DBI,             0x400000, 0 }, /* 0xe0400000 */
 	{ TARGET_GCB,                 0x2010000, 1 }, /* 0xe2010000 */
 	{ TARGET_QS,                  0x2030000, 1 }, /* 0xe2030000 */
 	{ TARGET_PTP,                 0x2040000, 1 }, /* 0xe2040000 */
@@ -491,9 +492,15 @@ const struct sparx5_match_data lan969x_desc = {
 		.get_pipeline_pt = &lan969x_get_packet_pipeline_pt,
 		.get_taxi = &lan969x_get_taxi,
 		.get_hsch_max_group_rate = &lan969x_get_hsch_max_group_rate,
+#ifndef CONFIG_MFD_LAN969X_PCI
 		.fdma_stop = lan969x_fdma_stop,
 		.fdma_start = lan969x_fdma_start,
 		.fdma_xmit = lan969x_fdma_xmit,
+#else
+		.fdma_stop = lan969x_fdma_pci_stop,
+		.fdma_start = lan969x_fdma_pci_start,
+		.fdma_xmit = lan969x_fdma_pci_xmit,
+#endif
 		.ptp_irq_handler = lan969x_ptp_irq_handler,
 		.get_internal_port_cal_speed = &lan969x_get_internal_port_cal_speed,
 		.dsm_calendar_calc = &lan969x_dsm_calendar_calc,
@@ -519,7 +526,8 @@ const struct sparx5_match_data lan969x_desc = {
 		.gate_cnt = 256,
 		.lb_cnt = 496,
 		.tod_pin = 7,
-		.fdma_db_cnt = 3,
+		.vmid_cnt = 127,
+		.arp_tbl_cnt = 1024,
 		.vcaps = lan969x_vcaps,
 		.vcaps_cfg = lan969x_vcap_inst_cfg,
 		.vcap_stats = &lan969x_vcap_stats,

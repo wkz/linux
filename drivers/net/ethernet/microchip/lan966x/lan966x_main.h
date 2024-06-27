@@ -30,6 +30,8 @@
 #include <vcap_api.h>
 #include <vcap_api_client.h>
 
+#include <fdma_api.h>
+
 #define TABLE_UPDATE_SLEEP_US		10
 #define TABLE_UPDATE_TIMEOUT_US		100000
 
@@ -88,15 +90,6 @@
 
 #define FDMA_RX_DCB_MAX_DBS		1
 #define FDMA_TX_DCB_MAX_DBS		1
-#define FDMA_DCB_INFO_DATAL(x)		((x) & GENMASK(15, 0))
-
-#define FDMA_DCB_STATUS_BLOCKL(x)	((x) & GENMASK(15, 0))
-#define FDMA_DCB_STATUS_SOF		BIT(16)
-#define FDMA_DCB_STATUS_EOF		BIT(17)
-#define FDMA_DCB_STATUS_INTR		BIT(18)
-#define FDMA_DCB_STATUS_DONE		BIT(19)
-#define FDMA_DCB_STATUS_BLOCKO(x)	(((x) << 20) & GENMASK(31, 20))
-#define FDMA_DCB_INVALID_DATA		0x1
 
 #define FDMA_XTR_CHANNEL		6
 #define FDMA_INJ_CHANNEL		0
@@ -241,48 +234,13 @@ int lan966x_xdp_pci_run(struct lan966x_port *port, void *data, u32 data_len);
 
 struct lan966x_port;
 
-struct lan966x_db {
-	u64 dataptr;
-	u64 status;
-};
-
-struct lan966x_rx_dcb {
-	u64 nextptr;
-	u64 info;
-	struct lan966x_db db[FDMA_RX_DCB_MAX_DBS];
-};
-
-struct lan966x_tx_dcb {
-	u64 nextptr;
-	u64 info;
-	struct lan966x_db db[FDMA_TX_DCB_MAX_DBS];
-};
-
 struct lan966x_rx {
 	struct lan966x *lan966x;
 
-	/* Pointer to the array of hardware dcbs. */
-	struct lan966x_rx_dcb *dcbs;
-
-	/* Pointer to the last address in the dcbs. */
-	struct lan966x_rx_dcb *last_entry;
+	struct fdma *fdma;
 
 	/* For each DB, there is a page */
 	struct page *page[FDMA_DCB_MAX][FDMA_RX_DCB_MAX_DBS];
-
-	/* Represents the db_index, it can have a value between 0 and
-	 * FDMA_RX_DCB_MAX_DBS, once it reaches the value of FDMA_RX_DCB_MAX_DBS
-	 * it means that the DCB can be reused.
-	 */
-	int db_index;
-
-	/* Represents the index in the dcbs. It has a value between 0 and
-	 * FDMA_DCB_MAX
-	 */
-	int dcb_index;
-
-	/* Represents the dma address to the dcbs array */
-	dma_addr_t dma;
 
 	/* Represents the page order that is used to allocate the pages for the
 	 * RX buffers. This value is calculated based on max MTU of the devices.
@@ -294,12 +252,10 @@ struct lan966x_rx {
 	 */
 	u32 max_mtu;
 
-	u8 channel_id;
-
 	struct page_pool *page_pool;
 
 #ifdef CONFIG_MFD_LAN966X_PCI
-	struct lan966x_pci_atu_region *atu;
+	struct fdma_pci_atu_region *atu_region;
 #endif
 };
 
@@ -321,19 +277,13 @@ struct lan966x_tx_dcb_buf {
 struct lan966x_tx {
 	struct lan966x *lan966x;
 
-	/* Pointer to the dcb list */
-	struct lan966x_tx_dcb *dcbs;
-	u16 last_in_use;
+	struct fdma *fdma;
 
-	/* Represents the DMA address to the first entry of the dcb entries. */
-	dma_addr_t dma;
 #ifdef CONFIG_MFD_LAN966X_PCI
-	struct lan966x_pci_atu_region *atu;
+	struct fdma_pci_atu_region *atu_region;
 #endif
 	/* Array of dcbs that are given to the HW */
 	struct lan966x_tx_dcb_buf *dcbs_buf;
-
-	u8 channel_id;
 
 	bool activated;
 };
@@ -544,7 +494,7 @@ struct lan966x {
 
 #ifdef CONFIG_MFD_LAN966X_PCI
 	/* fdma pci */
-	struct lan966x_pci_atu_region atu_regions[PCIE_ATU_REGION_MAX];
+	struct fdma_pci_atu atu;
 #endif
 
 	/* Mirror */
@@ -836,15 +786,11 @@ void lan966x_fdma_deinit(struct lan966x *lan966x);
 irqreturn_t lan966x_fdma_irq_handler(int irq, void *args);
 int lan966x_fdma_reload_page_pool(struct lan966x *lan966x);
 void lan966x_fdma_wakeup_netdev(struct lan966x *lan966x);
-bool lan966x_fdma_rx_more_frames(struct lan966x_rx *rx);
-void lan966x_fdma_rx_advance_dcb(struct lan966x_rx *rx);
 void lan966x_fdma_rx_reload(struct lan966x_rx *rx);
 int lan966x_fdma_get_max_frame(struct lan966x *lan966x);
 void lan966x_fdma_rx_start(struct lan966x_rx *rx);
 void lan966x_fdma_rx_disable(struct lan966x_rx *rx);
 void lan966x_fdma_tx_disable(struct lan966x_tx *tx);
-void lan966x_fdma_tx_add_dcb(struct lan966x_tx *tx, struct lan966x_tx_dcb *dcb);
-int lan966x_fdma_get_next_dcb(struct lan966x_tx *tx);
 void lan966x_fdma_llp_configure(struct lan966x *lan966x, u64 addr,
 				u8 channel_id);
 void lan966x_fdma_stop_netdev(struct lan966x *lan966x);
@@ -852,6 +798,7 @@ int lan966x_qsys_sw_status(struct lan966x *lan966x);
 void lan966x_fdma_tx_reload(struct lan966x_tx *tx);
 void lan966x_fdma_tx_activate(struct lan966x_tx *tx);
 int lan966x_fdma_napi_poll(struct napi_struct *napi, int weight);
+void lan966x_fdma_tx_start(struct lan966x_tx *tx);
 
 #ifdef CONFIG_MFD_LAN966X_PCI
 extern const struct lan966x_match_data lan966x_pci_desc;

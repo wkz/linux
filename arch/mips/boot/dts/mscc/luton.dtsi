@@ -132,10 +132,10 @@
 			reg-names = "origin1_2";
 			interrupt-parent = <&intc>;
 			interrupts = <2>, // VCore SW0
-				     <0>, <13>, <14>, <26>;
+				     <0>, <13>, <14>, <26>, <12>;
 			interrupt-names = "master",
 					  "ext_src0", "sgpio0",
-					  "dev_all", "ptp_sync";
+					  "dev_all", "ptp_sync", "gpio";
 			status = "disabled";
 		};
 

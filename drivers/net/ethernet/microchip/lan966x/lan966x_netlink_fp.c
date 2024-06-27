@@ -36,6 +36,9 @@ static int lan966x_qos_fp_port_genl_conf_set(struct sk_buff *skb,
 	ifindex = nla_get_u32(info->attrs[MCHP_QOS_FP_PORT_ATTR_IDX]);
 
 	dev = __dev_get_by_index(net, ifindex);
+	if (dev == NULL)
+		return -EINVAL;
+
 	if (!lan966x_netdevice_check(dev))
 		return -EOPNOTSUPP;
 
@@ -78,6 +81,9 @@ static int lan966x_qos_fp_port_genl_conf_get(struct sk_buff *skb,
 	ifindex = nla_get_u32(info->attrs[MCHP_QOS_FP_PORT_ATTR_IDX]);
 
 	dev = __dev_get_by_index(net, ifindex);
+	if (dev == NULL)
+		return -EINVAL;
+
 	if (!lan966x_netdevice_check(dev))
 		return -EOPNOTSUPP;
 
@@ -149,6 +155,9 @@ static int lan966x_qos_fp_port_genl_status_get(struct sk_buff *skb,
 	ifindex = nla_get_u32(info->attrs[MCHP_QOS_FP_PORT_ATTR_IDX]);
 
 	dev = __dev_get_by_index(net, ifindex);
+	if (dev == NULL)
+		return -EINVAL;
+
 	if (!lan966x_netdevice_check(dev))
 		return -EOPNOTSUPP;
 

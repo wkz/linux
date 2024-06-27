@@ -208,11 +208,12 @@
 
 			lan969x_switch: switch@e0000000 {
 				compatible = "microchip,lan969x-switch";
-				reg = <0xe00c0000 0x0010000>,
+				reg = <0xe00c0000 0x800000>,
 				      <0xe2010000 0x1410000>;
 				reg-names = "cpu", "dev";
-				interrupt-names = "xtr", "ptp", "ptp-ext";
+				interrupt-names = "xtr", "fdma", "ptp", "ptp-ext";
 				interrupts = <10 IRQ_TYPE_LEVEL_HIGH>,
+					     <88 IRQ_TYPE_LEVEL_HIGH>,
 					     <9 IRQ_TYPE_LEVEL_HIGH>,
 					     <8 IRQ_TYPE_LEVEL_HIGH>;
 			};

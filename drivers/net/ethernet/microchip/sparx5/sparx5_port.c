@@ -749,6 +749,18 @@ int sparx5_serdes_set(struct sparx5 *sparx5,
 	return err;
 }
 
+struct net_device *sparx5_port_get_ndev(struct sparx5 *sparx5)
+{
+	/* Fetch a port netdev, any will do */
+	for (int i = 0; i < sparx5->data->consts.chip_ports; ++i) {
+		struct sparx5_port *port = sparx5->ports[i];
+
+		if (port && port->ndev)
+			return port->ndev;
+	}
+	return NULL;
+}
+
 static int sparx5_port_pcs_low_set(struct sparx5 *sparx5,
 				   struct sparx5_port *port,
 				   struct sparx5_port_config *conf)

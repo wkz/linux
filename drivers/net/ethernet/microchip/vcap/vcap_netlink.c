@@ -301,6 +301,11 @@ static void vcap_genl_copy_actionfield(struct vcap_client_actionfield_data *data
 	}
 }
 
+static enum vcap_bit vcap_val_to_bit(u8 value)
+{
+	return value & 1 ? VCAP_BIT_1 : VCAP_BIT_0;
+}
+
 static int vcap_genl_add_rule_key_value_by_type(struct vcap_rule *rule,
 						enum vcap_key_field key_id,
 						enum vcap_field_type ftype,
@@ -308,7 +313,9 @@ static int vcap_genl_add_rule_key_value_by_type(struct vcap_rule *rule,
 {
 	switch (ftype) {
 	case VCAP_FIELD_BIT:
-		return vcap_rule_add_key_bit(rule, key_id, data->u1.value);
+		return vcap_rule_add_key_bit(rule,
+					     key_id,
+					     vcap_val_to_bit(data->u1.value));
 	case VCAP_FIELD_U32:
 		return vcap_rule_add_key_u32(rule, key_id, data->u32.value,
 					     data->u32.value);
@@ -403,8 +410,8 @@ static int vcap_genl_add_rule_action_value_by_type(
 {
 	switch (ftype) {
 	case VCAP_FIELD_BIT:
-		return vcap_rule_add_action_bit(rule, action_id,
-						data->u1.value);
+		return vcap_rule_add_action_bit(
+			rule, action_id, vcap_val_to_bit(data->u1.value));
 	case VCAP_FIELD_U32:
 		return vcap_rule_add_action_u32(rule, action_id,
 						data->u32.value);

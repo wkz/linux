@@ -309,11 +309,15 @@ static int uio_sparx5_irqmux_probe(struct platform_device *pdev)
 	if (priv->io_enabled) {
 		int i;
 		const struct resource *res;
+		size_t sz;
 
-		for (i = 0, res = &pdev->resource[0];
-		     resource_type(res) == IORESOURCE_MEM; i++, res++) {
-			size_t sz = resource_size(res);
+		for (i = 0; i < pdev->num_resources; i++) {
+			res = &pdev->resource[i];
 
+			if (resource_type(res) != IORESOURCE_MEM)
+				continue;
+
+			sz = resource_size(res);
 			priv->info.mem[i].memtype = UIO_MEM_PHYS;
 			priv->info.mem[i].addr = res->start;
 			priv->info.mem[i].size = sz;

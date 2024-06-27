@@ -127,7 +127,6 @@ static const struct sparx5_match_data sparx5_appl_desc = {
 	},
 	.consts = {
 		.chip_ports = 65,
-		.fdma_db_cnt = 15,
 		.ifh_id = 11,
 	}
 };
@@ -156,7 +155,6 @@ static const struct sparx5_match_data lan969x_appl_desc = {
 	},
 	.consts = {
 		.chip_ports = 30,
-		.fdma_db_cnt = 3,
 		.ifh_id = 14,
 	}
 };

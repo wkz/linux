@@ -150,6 +150,7 @@ static void sparx5_show_portstate(struct seq_file *m,
 				  struct ethtool_eeprom *sfp_eeprom)
 {
 	struct sfp_eeprom_id *id = (struct sfp_eeprom_id *)&sfp_eeprom->data[0];
+	const struct sparx5_ops *ops = &port->sparx5->data->ops;
 	struct net_device *ndev = port->ndev;
 	struct sparx5_port_status status;
 	u32 value;
@@ -161,7 +162,7 @@ static void sparx5_show_portstate(struct seq_file *m,
 		phy_link = ndev->phydev->link;
 		aneg_enabled = ndev->phydev->autoneg;
 		aneg_complete = ndev->phydev->autoneg_complete;
-	} else {
+	} else if (ops->port_is_2g5(port->portno)) {
 		value = spx5_rd(port->sparx5, DEV2G5_PCS1G_ANEG_CFG(port->portno));
 		aneg_enabled = DEV2G5_PCS1G_ANEG_CFG_ANEG_ENA_GET(value);
 		value = spx5_rd(port->sparx5, DEV2G5_PCS1G_ANEG_STATUS(port->portno));

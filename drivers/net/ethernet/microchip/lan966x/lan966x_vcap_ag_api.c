@@ -3158,6 +3158,46 @@ static int es0_actionfield_set_map_size[] = {
 };
 
 /* Type Groups */
+static const struct vcap_typegroup_hdr is1_keyfield_set_typegroup_hdrs[] = {
+	[4] = {
+		.tg_width = 3,
+		.type_width = 2,
+	},
+	[2] = {
+		.tg_width = 2,
+		.type_width = 1,
+	},
+	[1] = {
+		.tg_width = 1,
+		.type_width = 2,
+	},
+	[5] = {},
+};
+
+static const struct vcap_typegroup_hdr is2_keyfield_set_typegroup_hdrs[] = {
+	[4] = {
+		.tg_width = 3,
+		.type_width = 2,
+	},
+	[2] = {
+		.tg_width = 2,
+		.type_width = 4,
+	},
+	[1] = {
+		.tg_width = 1,
+		.type_width = 0,
+	},
+	[5] = {},
+};
+
+static const struct vcap_typegroup_hdr es0_keyfield_set_typegroup_hdrs[] = {
+	[1] = {
+		.tg_width = 0,
+		.type_width = 0,
+	},
+	[2] = {},
+};
+
 static const struct vcap_typegroup is1_x4_keyfield_set_typegroups[] = {
 	{
 		.offset = 0,
@@ -3275,6 +3315,34 @@ static const struct vcap_typegroup *es0_keyfield_set_typegroups[] = {
 	[2] = NULL,
 };
 
+static const struct vcap_typegroup_hdr is1_actionfield_set_typegroup_hdrs[] = {
+	[1] = {
+		.tg_width = 0,
+		.type_width = 1,
+	},
+	[5] = {},
+};
+
+static const struct vcap_typegroup_hdr is2_actionfield_set_typegroup_hdrs[] = {
+	[2] = {
+		.tg_width = 2,
+		.type_width = 0,
+	},
+	[1] = {
+		.tg_width = 1,
+		.type_width = 0,
+	},
+	[5] = {},
+};
+
+static const struct vcap_typegroup_hdr es0_actionfield_set_typegroup_hdrs[] = {
+	[1] = {
+		.tg_width = 0,
+		.type_width = 0,
+	},
+	[2] = {},
+};
+
 static const struct vcap_typegroup is1_x1_actionfield_set_typegroups[] = {
 	{}
 };
@@ -3329,12 +3397,15 @@ static const char * const vcap_keyfield_set_names[] = {
 	[VCAP_KFS_5TUPLE_IP6]                    =  "VCAP_KFS_5TUPLE_IP6",
 	[VCAP_KFS_7TUPLE]                        =  "VCAP_KFS_7TUPLE",
 	[VCAP_KFS_ARP]                           =  "VCAP_KFS_ARP",
+	[VCAP_KFS_DBL_IP4]                       =  "VCAP_KFS_DBL_IP4",
+	[VCAP_KFS_DBL_IP6]                       =  "VCAP_KFS_DBL_IP6",
 	[VCAP_KFS_DBL_VID]                       =  "VCAP_KFS_DBL_VID",
 	[VCAP_KFS_DMAC_VID]                      =  "VCAP_KFS_DMAC_VID",
 	[VCAP_KFS_ETAG]                          =  "VCAP_KFS_ETAG",
 	[VCAP_KFS_IP4_OTHER]                     =  "VCAP_KFS_IP4_OTHER",
 	[VCAP_KFS_IP4_TCP_UDP]                   =  "VCAP_KFS_IP4_TCP_UDP",
 	[VCAP_KFS_IP4_VID]                       =  "VCAP_KFS_IP4_VID",
+	[VCAP_KFS_IP6PFX_ID]                     =  "VCAP_KFS_IP6PFX_ID",
 	[VCAP_KFS_IP6_OTHER]                     =  "VCAP_KFS_IP6_OTHER",
 	[VCAP_KFS_IP6_STD]                       =  "VCAP_KFS_IP6_STD",
 	[VCAP_KFS_IP6_TCP_UDP]                   =  "VCAP_KFS_IP6_TCP_UDP",
@@ -3354,6 +3425,8 @@ static const char * const vcap_keyfield_set_names[] = {
 	[VCAP_KFS_OAM]                           =  "VCAP_KFS_OAM",
 	[VCAP_KFS_PURE_5TUPLE_IP4]               =  "VCAP_KFS_PURE_5TUPLE_IP4",
 	[VCAP_KFS_RT]                            =  "VCAP_KFS_RT",
+	[VCAP_KFS_SGL_IP4]                       =  "VCAP_KFS_SGL_IP4",
+	[VCAP_KFS_SGL_IP6]                       =  "VCAP_KFS_SGL_IP6",
 	[VCAP_KFS_SMAC_SIP4]                     =  "VCAP_KFS_SMAC_SIP4",
 	[VCAP_KFS_SMAC_SIP6]                     =  "VCAP_KFS_SMAC_SIP6",
 	[VCAP_KFS_VID]                           =  "VCAP_KFS_VID",
@@ -3362,11 +3435,14 @@ static const char * const vcap_keyfield_set_names[] = {
 /* Actionfieldset names */
 static const char * const vcap_actionfield_set_names[] = {
 	[VCAP_AFS_NO_VALUE]                      =  "(None)",
+	[VCAP_AFS_ARP_ENTRY]                     =  "VCAP_AFS_ARP_ENTRY",
+	[VCAP_AFS_ARP_PTR]                       =  "VCAP_AFS_ARP_PTR",
 	[VCAP_AFS_BASE_TYPE]                     =  "VCAP_AFS_BASE_TYPE",
 	[VCAP_AFS_CLASSIFICATION]                =  "VCAP_AFS_CLASSIFICATION",
 	[VCAP_AFS_CLASS_REDUCED]                 =  "VCAP_AFS_CLASS_REDUCED",
 	[VCAP_AFS_ES0]                           =  "VCAP_AFS_ES0",
 	[VCAP_AFS_FULL]                          =  "VCAP_AFS_FULL",
+	[VCAP_AFS_L3MC_PTR]                      =  "VCAP_AFS_L3MC_PTR",
 	[VCAP_AFS_S1]                            =  "VCAP_AFS_S1",
 	[VCAP_AFS_S1_RT]                         =  "VCAP_AFS_S1_RT",
 	[VCAP_AFS_SMAC_SIP]                      =  "VCAP_AFS_SMAC_SIP",
@@ -3403,6 +3479,7 @@ static const char * const vcap_keyfield_names[] = {
 	[VCAP_KF_8021Q_VLAN_TAGGED_IS]           =  "8021Q_VLAN_TAGGED_IS",
 	[VCAP_KF_8021Q_VLAN_TAGS]                =  "8021Q_VLAN_TAGS",
 	[VCAP_KF_ACL_GRP_ID]                     =  "ACL_GRP_ID",
+	[VCAP_KF_AFFIX]                          =  "AFFIX",
 	[VCAP_KF_ARP_ADDR_SPACE_OK_IS]           =  "ARP_ADDR_SPACE_OK_IS",
 	[VCAP_KF_ARP_LEN_OK_IS]                  =  "ARP_LEN_OK_IS",
 	[VCAP_KF_ARP_OPCODE]                     =  "ARP_OPCODE",
@@ -3411,6 +3488,7 @@ static const char * const vcap_keyfield_names[] = {
 	[VCAP_KF_ARP_SENDER_MATCH_IS]            =  "ARP_SENDER_MATCH_IS",
 	[VCAP_KF_ARP_TGT_MATCH_IS]               =  "ARP_TGT_MATCH_IS",
 	[VCAP_KF_COSID_CLS]                      =  "COSID_CLS",
+	[VCAP_KF_DST_FLAG]                       =  "DST_FLAG",
 	[VCAP_KF_ES0_ISDX_KEY_ENA]               =  "ES0_ISDX_KEY_ENA",
 	[VCAP_KF_ETYPE]                          =  "ETYPE",
 	[VCAP_KF_ETYPE_LEN_IS]                   =  "ETYPE_LEN_IS",
@@ -3424,7 +3502,16 @@ static const char * const vcap_keyfield_names[] = {
 	[VCAP_KF_IF_IGR_PORT_MASK_RNG]           =  "IF_IGR_PORT_MASK_RNG",
 	[VCAP_KF_IF_IGR_PORT_MASK_SEL]           =  "IF_IGR_PORT_MASK_SEL",
 	[VCAP_KF_IF_IGR_PORT_SEL]                =  "IF_IGR_PORT_SEL",
+	[VCAP_KF_IP4_DIP]                        =  "IP4_DIP",
 	[VCAP_KF_IP4_IS]                         =  "IP4_IS",
+	[VCAP_KF_IP4_SIP]                        =  "IP4_SIP",
+	[VCAP_KF_IP4_XIP]                        =  "IP4_XIP",
+	[VCAP_KF_IP6PFX_ID]                      =  "IP6PFX_ID",
+	[VCAP_KF_IP6_DIP]                        =  "IP6_DIP",
+	[VCAP_KF_IP6_SIP]                        =  "IP6_SIP",
+	[VCAP_KF_IP6_XIP]                        =  "IP6_XIP",
+	[VCAP_KF_IP6_XIP_0]                      =  "IP6_XIP_0",
+	[VCAP_KF_IP6_XIP_1]                      =  "IP6_XIP_1",
 	[VCAP_KF_IP_MC_IS]                       =  "IP_MC_IS",
 	[VCAP_KF_IP_PAYLOAD_5TUPLE]              =  "IP_PAYLOAD_5TUPLE",
 	[VCAP_KF_IP_PAYLOAD_S1_IP6]              =  "IP_PAYLOAD_S1_IP6",
@@ -3509,6 +3596,10 @@ static const char * const vcap_actionfield_names[] = {
 	[VCAP_AF_NO_VALUE]                       =  "(None)",
 	[VCAP_AF_ACL_ID]                         =  "ACL_ID",
 	[VCAP_AF_ANA2_TSN_DIS]                   =  "ANA2_TSN_DIS",
+	[VCAP_AF_ARP_ENA]                        =  "ARP_ENA",
+	[VCAP_AF_ARP_PTR]                        =  "ARP_PTR",
+	[VCAP_AF_ARP_PTR_REMAP_ENA]              =  "ARP_PTR_REMAP_ENA",
+	[VCAP_AF_ARP_VMID]                       =  "ARP_VMID",
 	[VCAP_AF_CLS_VID_SEL]                    =  "CLS_VID_SEL",
 	[VCAP_AF_CNT_ID]                         =  "CNT_ID",
 	[VCAP_AF_COPY_PORT_NUM]                  =  "COPY_PORT_NUM",
@@ -3529,6 +3620,8 @@ static const char * const vcap_actionfield_names[] = {
 	[VCAP_AF_DSCP_ENA]                       =  "DSCP_ENA",
 	[VCAP_AF_DSCP_SEL]                       =  "DSCP_SEL",
 	[VCAP_AF_DSCP_VAL]                       =  "DSCP_VAL",
+	[VCAP_AF_ECMP_CNT]                       =  "ECMP_CNT",
+	[VCAP_AF_ENCAP_ID]                       =  "ENCAP_ID",
 	[VCAP_AF_ES2_REW_CMD]                    =  "ES2_REW_CMD",
 	[VCAP_AF_ESDX]                           =  "ESDX",
 	[VCAP_AF_FWD_ENA]                        =  "FWD_ENA",
@@ -3545,10 +3638,13 @@ static const char * const vcap_actionfield_names[] = {
 	[VCAP_AF_ISDX_ENA]                       =  "ISDX_ENA",
 	[VCAP_AF_ISDX_REPLACE_ENA]               =  "ISDX_REPLACE_ENA",
 	[VCAP_AF_ISDX_VAL]                       =  "ISDX_VAL",
+	[VCAP_AF_L3MC_PTR]                       =  "L3MC_PTR",
 	[VCAP_AF_LLCT_ENA]                       =  "LLCT_ENA",
 	[VCAP_AF_LLCT_PORT]                      =  "LLCT_PORT",
 	[VCAP_AF_LOOP_ENA]                       =  "LOOP_ENA",
 	[VCAP_AF_LRN_DIS]                        =  "LRN_DIS",
+	[VCAP_AF_MAC_LSB]                        =  "MAC_LSB",
+	[VCAP_AF_MAC_MSB]                        =  "MAC_MSB",
 	[VCAP_AF_MAP_IDX]                        =  "MAP_IDX",
 	[VCAP_AF_MAP_KEY]                        =  "MAP_KEY",
 	[VCAP_AF_MAP_LOOKUP_SEL]                 =  "MAP_LOOKUP_SEL",
@@ -3586,14 +3682,19 @@ static const char * const vcap_actionfield_names[] = {
 	[VCAP_AF_QOS_ENA]                        =  "QOS_ENA",
 	[VCAP_AF_QOS_VAL]                        =  "QOS_VAL",
 	[VCAP_AF_REW_OP]                         =  "REW_OP",
+	[VCAP_AF_RGID]                           =  "RGID",
+	[VCAP_AF_RSDX]                           =  "RSDX",
 	[VCAP_AF_RTE_INB_UPD]                    =  "RTE_INB_UPD",
 	[VCAP_AF_RTP_ID]                         =  "RTP_ID",
 	[VCAP_AF_RTP_SUBID]                      =  "RTP_SUBID",
 	[VCAP_AF_RT_DIS]                         =  "RT_DIS",
+	[VCAP_AF_SECUR_MATCH_MAC_ENA]            =  "SECUR_MATCH_MAC_ENA",
+	[VCAP_AF_SECUR_MATCH_VMID_ENA]           =  "SECUR_MATCH_VMID_ENA",
 	[VCAP_AF_SFID_ENA]                       =  "SFID_ENA",
 	[VCAP_AF_SFID_VAL]                       =  "SFID_VAL",
 	[VCAP_AF_SGID_ENA]                       =  "SGID_ENA",
 	[VCAP_AF_SGID_VAL]                       =  "SGID_VAL",
+	[VCAP_AF_SIP_RPF_ENA]                    =  "SIP_RPF_ENA",
 	[VCAP_AF_SRC_FILTER_ENA]                 =  "SRC_FILTER_ENA",
 	[VCAP_AF_SWAP_MACS_ENA]                  =  "SWAP_MACS_ENA",
 	[VCAP_AF_TAG_A_DEI_SEL]                  =  "TAG_A_DEI_SEL",
@@ -3617,6 +3718,7 @@ static const char * const vcap_actionfield_names[] = {
 	[VCAP_AF_VID_VAL]                        =  "VID_VAL",
 	[VCAP_AF_VLAN_POP_CNT]                   =  "VLAN_POP_CNT",
 	[VCAP_AF_VLAN_POP_CNT_ENA]               =  "VLAN_POP_CNT_ENA",
+	[VCAP_AF_ZERO_DMAC_CPU_QU]               =  "ZERO_DMAC_CPU_QU",
 };
 
 /* VCAPs */
@@ -3641,6 +3743,8 @@ const struct vcap_info lan966x_vcaps[] = {
 		.actionfield_set_map_size = is1_actionfield_set_map_size,
 		.keyfield_set_typegroups = is1_keyfield_set_typegroups,
 		.actionfield_set_typegroups = is1_actionfield_set_typegroups,
+		.keyfield_set_typegroup_hdrs = is1_keyfield_set_typegroup_hdrs,
+		.actionfield_set_typegroup_hdrs = is1_actionfield_set_typegroup_hdrs,
 	},
 	[VCAP_TYPE_IS2] = {
 		.name = "is2",
@@ -3662,6 +3766,8 @@ const struct vcap_info lan966x_vcaps[] = {
 		.actionfield_set_map_size = is2_actionfield_set_map_size,
 		.keyfield_set_typegroups = is2_keyfield_set_typegroups,
 		.actionfield_set_typegroups = is2_actionfield_set_typegroups,
+		.keyfield_set_typegroup_hdrs = is2_keyfield_set_typegroup_hdrs,
+		.actionfield_set_typegroup_hdrs = is2_actionfield_set_typegroup_hdrs,
 	},
 	[VCAP_TYPE_ES0] = {
 		.name = "es0",
@@ -3683,6 +3789,8 @@ const struct vcap_info lan966x_vcaps[] = {
 		.actionfield_set_map_size = es0_actionfield_set_map_size,
 		.keyfield_set_typegroups = es0_keyfield_set_typegroups,
 		.actionfield_set_typegroups = es0_actionfield_set_typegroups,
+		.keyfield_set_typegroup_hdrs = es0_keyfield_set_typegroup_hdrs,
+		.actionfield_set_typegroup_hdrs = es0_actionfield_set_typegroup_hdrs,
 	},
 };
 

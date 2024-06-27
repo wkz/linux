@@ -11,7 +11,7 @@ sparx5-switch-y  := sparx5_main.o sparx5_packet.o \
  sparx5_ptp.o sparx5_pgid.o sparx5_tc.o sparx5_qos.o \
  sparx5_vcap_impl.o sparx5_vcap_ag_api.o sparx5_tc_flower.o \
  sparx5_tc_matchall.o sparx5_pool.o sparx5_sdlb.o sparx5_police.o sparx5_psfp.o \
- sparx5_netlink_qos.o sparx5_netlink_fp.o sparx5_regs.o
+ sparx5_netlink_qos.o sparx5_netlink_fp.o sparx5_regs.o sparx5_router.o
 
 sparx5-switch-$(CONFIG_SPARX5_DCB) += sparx5_dcb.o
 
@@ -31,5 +31,8 @@ lan969x-switch-y := lan969x/lan969x_regs.o lan969x/lan969x.o \
  lan969x/lan969x_vcap_impl.o lan969x/lan969x_vcap_ag_api.o \
  lan969x/lan969x_fdma.o
 
+lan969x-switch-$(CONFIG_MFD_LAN969X_PCI) += lan969x/lan969x_fdma_pci.o
+
 # Provide include files
 ccflags-y += -I$(srctree)/drivers/net/ethernet/microchip/vcap
+ccflags-y += -I$(srctree)/drivers/net/ethernet/microchip/fdma
