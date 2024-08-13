@@ -330,7 +330,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 			gcd = sparx5_dsm_exb_gcd(gcd, data->taxi_speeds[jdx]);
 	}
 	if (sum == 0) /* Empty calendar */
-		return 0;
+		goto out_empty;
 	/* Make room for overhead traffic */
 	factor = 100 * 100 * 1000 / (100 * 100 - SPX5_DSM_CAL_BW_LOSS);
 
@@ -479,6 +479,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 		}
 	}
 
+out_empty:
 	*cal_len = sparx5_dsm_cal_len(data->schedule);
 
 	return 0;
