@@ -33,10 +33,10 @@
 
 		select-delay = <100>; /* The signal needs to get stabilized */
 
-		mux-gpios = <&sgpio_out 10 0 GPIO_ACTIVE_HIGH
-			     &sgpio_out 10 1 GPIO_ACTIVE_HIGH
-			     &sgpio_out 10 2 GPIO_ACTIVE_HIGH
-			     &sgpio_out 10 3 GPIO_ACTIVE_HIGH>;
+		mux-gpios = <&sgpio_out 28 0 GPIO_ACTIVE_HIGH
+			     &sgpio_out 28 1 GPIO_ACTIVE_HIGH
+			     &sgpio_out 28 2 GPIO_ACTIVE_HIGH
+			     &sgpio_out 28 3 GPIO_ACTIVE_HIGH>;
 		idle-state = <0x10>;
 
 		i2c_sfp0: i2c-sfp0 {
@@ -472,7 +472,7 @@
 	pinctrl-0 = <&sgpio_pins>;
 	pinctrl-names = "default";
 
-	microchip,sgpio-port-ranges = <0 11>;
+	microchip,sgpio-port-ranges = <0 28>;
 	bus-frequency = <3000000>;
 	status = "okay";
 
