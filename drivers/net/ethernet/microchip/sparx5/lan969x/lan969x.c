@@ -346,12 +346,14 @@ enum sparx5_cal_bw lan969x_get_internal_port_cal_speed(struct sparx5 *sparx5,
 	    portno == sparx5_get_internal_port(sparx5, PORT_CPU_1)) {
 		return SPX5_CAL_SPEED_1G;
 	} else if (portno == sparx5_get_internal_port(sparx5, PORT_VD0)) {
-		return SPX5_CAL_SPEED_10G;
+		/* IPMC only idle BW */
+		return SPX5_CAL_SPEED_NONE;
 	} else if (portno == sparx5_get_internal_port(sparx5, PORT_VD1)) {
 		/* OAM only idle BW */
 		return SPX5_CAL_SPEED_NONE;
 	} else if (portno == sparx5_get_internal_port(sparx5, PORT_VD2)) {
-		return SPX5_CAL_SPEED_10G;
+		/* IPinIP gets only idle BW */
+		return SPX5_CAL_SPEED_NONE;
 	}
 	/* not in port map */
 	return SPX5_CAL_SPEED_NONE;
