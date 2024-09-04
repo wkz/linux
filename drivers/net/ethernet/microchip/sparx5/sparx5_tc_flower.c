@@ -1532,7 +1532,6 @@ static int sparx5_tc_flower_template_destroy(struct net_device *ndev,
 {
 	struct sparx5_port *port = netdev_priv(ndev);
 	struct sparx5_tc_flower_template *ftp, *tmp;
-	int err = -ENOENT;
 
 	/* Rules using the template are removed by the tc framework */
 	list_for_each_entry_safe(ftp, tmp, &port->tc_templates, list) {
@@ -1545,9 +1544,9 @@ static int sparx5_tc_flower_template_destroy(struct net_device *ndev,
 					    NULL);
 		list_del(&ftp->list);
 		kfree(ftp);
-		break;
+		return 0;
 	}
-	return err;
+	return -ENOENT;
 }
 
 int sparx5_tc_flower(struct net_device *ndev, struct flow_cls_offload *fco,
