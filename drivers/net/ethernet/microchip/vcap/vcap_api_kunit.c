@@ -376,6 +376,7 @@ static void vcap_api_iterator_init_test(struct kunit *test)
 		{ .offset = 0, .width = 3, .value = 4, },
 		{ .offset = 49, .width = 2, .value = 0, },
 		{ .offset = 98, .width = 2, .value = 0, },
+		{ },
 	};
 
 	vcap_iter_init(&iter, 52, typegroups, 86);
