@@ -451,7 +451,7 @@ static int vcap_show_admin_raw(struct vcap_control *vctrl,
 		ret = vcap_find_keystream_keysets(vctrl, vt,
 						  admin->cache.keystream,
 						  admin->cache.maskstream,
-						  false, 0, &kslist);
+						  false, 1, &kslist);
 		if (ret < 0)
 			goto continue_prt_streams;
 
@@ -459,12 +459,7 @@ static int vcap_show_admin_raw(struct vcap_control *vctrl,
 		if (!info)
 			goto continue_prt_streams;
 
-		if (addr % info->sw_per_item) {
-			pr_info("addr: %d X%d error rule, keyset: %s\n",
-				addr,
-				info->sw_per_item,
-				vcap_keyset_name(vctrl, kslist.keysets[0]));
-		} else {
+		if ((addr % info->sw_per_item) == 0) {
 			actionset = vcap_find_actionstream_actionset(
 				vctrl, vt, admin->cache.actionstream, 0);
 			out->prf(out->dst,
