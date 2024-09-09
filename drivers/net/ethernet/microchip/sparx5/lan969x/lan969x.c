@@ -363,7 +363,6 @@ int lan969x_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 			      struct sparx5_calendar_data *data, u32 *cal_len)
 {
 	const struct sparx5_consts *consts = &sparx5->data->consts;
-	int devs_per_taxi = consts->dsm_cal_max_devs_per_taxi;
 	int bwavail[3], s_values[3] = { 5000, 2500, 1000 };
 	const struct sparx5_ops *ops = &sparx5->data->ops;
 	int i, j, p, sp, win, grplen, lcs, s, found;
@@ -376,9 +375,9 @@ int lan969x_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 	taxi_bw = (128 * 1000000 / clk_period_ps) / (1 + 1 / 20);
 
 	memcpy(data->taxi_ports, ops->get_taxi(taxi),
-	       devs_per_taxi * sizeof(u32));
+	       LAN969X_DSM_CAL_MAX_DEVS_PER_TAXI * sizeof(u32));
 
-	for (idx = 0; idx < devs_per_taxi; idx++) {
+	for (idx = 0; idx < LAN969X_DSM_CAL_MAX_DEVS_PER_TAXI; idx++) {
 		u32 portno = data->taxi_ports[idx];
 
 		if (portno < consts->chip_ports_all)
@@ -518,7 +517,6 @@ const struct sparx5_match_data lan969x_desc = {
 		.hsch_queue_cnt = 4,
 		.lb_group_cnt = 5,
 		.pgid_cnt = (1024 + 30),
-		.dsm_cal_max_devs_per_taxi = 10,
 		.dsm_cal_taxis = 5,
 		.sio_clk_cnt = 1,
 		.own_upsid_cnt = 1,

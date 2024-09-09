@@ -284,7 +284,6 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 			     struct sparx5_calendar_data *data, u32 *cal_len)
 {
 	const struct sparx5_consts *consts = &sparx5->data->consts;
-	int devs_per_taxi = consts->dsm_cal_max_devs_per_taxi;
 	const struct sparx5_ops *ops = &sparx5->data->ops;
 	u32 num_of_slots, slot_spd, empty_slots;
 	u32 gcd, idx, sum, min, factor;
@@ -295,7 +294,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 	taxi_bw = 128 * 1000000 / clk_period_ps;
 	slow_mode = !!(clk_period_ps > 2000);
 	memcpy(data->taxi_ports, ops->get_taxi(taxi),
-	       devs_per_taxi * sizeof(u32));
+	       SPX5_DSM_CAL_MAX_DEVS_PER_TAXI * sizeof(u32));
 
 	for (idx = 0; idx < SPX5_DSM_CAL_LEN; idx++) {
 		data->new_slots[idx] = SPX5_DSM_CAL_EMPTY;
@@ -306,7 +305,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 	data->schedule[0] = SPX5_DSM_CAL_MAX_DEVS_PER_TAXI;
 
 	/* Map ports to taxi positions */
-	for (idx = 0; idx < devs_per_taxi; idx++) {
+	for (idx = 0; idx < SPX5_DSM_CAL_MAX_DEVS_PER_TAXI; idx++) {
 		u32 portno = data->taxi_ports[idx];
 
 		if (portno < consts->chip_ports_all) {
@@ -394,7 +393,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 	empty_slots = num_of_slots - sum;
 
 	for (idx = 0; idx < empty_slots; idx++)
-		data->schedule[idx] = devs_per_taxi;
+		data->schedule[idx] = SPX5_DSM_CAL_MAX_DEVS_PER_TAXI;
 
 	for (idx = 1; idx < num_of_slots; idx++) {
 		u32 indices_len = 0;
@@ -489,12 +488,10 @@ static int sparx5_dsm_calendar_check(struct sparx5 *sparx5,
 				     struct sparx5_calendar_data *data, u32 cal_length)
 {
 	u32 slot_indices[SPX5_DSM_CAL_LEN], distances[SPX5_DSM_CAL_LEN];
-	const struct sparx5_consts *consts = &sparx5->data->consts;
-	int devs_per_taxi = consts->dsm_cal_max_devs_per_taxi;
 	u32 num_of_slots, idx, port;
 	int cnt, max_dist;
 
-	for (port = 0; port < devs_per_taxi; port++) {
+	for (port = 0; port < SPX5_DSM_CAL_MAX_DEVS_PER_TAXI; port++) {
 		num_of_slots = 0;
 		max_dist = data->avg_dist[port];
 		for (idx = 0; idx < SPX5_DSM_CAL_LEN; idx++) {
