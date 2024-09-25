@@ -57,21 +57,22 @@ static u32 sparx5_target_bandwidth(struct sparx5 *sparx5)
 	case SPX5_TARGET_CT_7558:
 	case SPX5_TARGET_CT_7558TSN:
 		return 201000;
+	case SPX5_TARGET_CT_LAN9691VAO:
+		return 46000;
 	case SPX5_TARGET_CT_LAN9694RED:
 	case SPX5_TARGET_CT_LAN9694TSN:
-	case SPX5_TARGET_CT_LAN9691VAO:
 	case SPX5_TARGET_CT_LAN9694:
-		return 68000;
+		return 48000;
 	case SPX5_TARGET_CT_LAN9696RED:
 	case SPX5_TARGET_CT_LAN9696TSN:
 	case SPX5_TARGET_CT_LAN9692VAO:
 	case SPX5_TARGET_CT_LAN9696:
-		return 88000;
+		return 66000;
 	case SPX5_TARGET_CT_LAN9698RED:
 	case SPX5_TARGET_CT_LAN9698TSN:
 	case SPX5_TARGET_CT_LAN9693VAO:
 	case SPX5_TARGET_CT_LAN9698:
-		return 106000;
+		return 102000;
 	default:
 		return 0;
 	}
@@ -284,7 +285,6 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 			     struct sparx5_calendar_data *data, u32 *cal_len)
 {
 	const struct sparx5_consts *consts = &sparx5->data->consts;
-	int devs_per_taxi = consts->dsm_cal_max_devs_per_taxi;
 	const struct sparx5_ops *ops = &sparx5->data->ops;
 	u32 num_of_slots, slot_spd, empty_slots;
 	u32 gcd, idx, sum, min, factor;
@@ -295,7 +295,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 	taxi_bw = 128 * 1000000 / clk_period_ps;
 	slow_mode = !!(clk_period_ps > 2000);
 	memcpy(data->taxi_ports, ops->get_taxi(taxi),
-	       devs_per_taxi * sizeof(u32));
+	       SPX5_DSM_CAL_MAX_DEVS_PER_TAXI * sizeof(u32));
 
 	for (idx = 0; idx < SPX5_DSM_CAL_LEN; idx++) {
 		data->new_slots[idx] = SPX5_DSM_CAL_EMPTY;
@@ -306,7 +306,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 	data->schedule[0] = SPX5_DSM_CAL_MAX_DEVS_PER_TAXI;
 
 	/* Map ports to taxi positions */
-	for (idx = 0; idx < devs_per_taxi; idx++) {
+	for (idx = 0; idx < SPX5_DSM_CAL_MAX_DEVS_PER_TAXI; idx++) {
 		u32 portno = data->taxi_ports[idx];
 
 		if (portno < consts->chip_ports_all) {
@@ -330,7 +330,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 			gcd = sparx5_dsm_exb_gcd(gcd, data->taxi_speeds[jdx]);
 	}
 	if (sum == 0) /* Empty calendar */
-		return 0;
+		goto out_empty;
 	/* Make room for overhead traffic */
 	factor = 100 * 100 * 1000 / (100 * 100 - SPX5_DSM_CAL_BW_LOSS);
 
@@ -394,7 +394,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 	empty_slots = num_of_slots - sum;
 
 	for (idx = 0; idx < empty_slots; idx++)
-		data->schedule[idx] = devs_per_taxi;
+		data->schedule[idx] = SPX5_DSM_CAL_MAX_DEVS_PER_TAXI;
 
 	for (idx = 1; idx < num_of_slots; idx++) {
 		u32 indices_len = 0;
@@ -479,6 +479,7 @@ int sparx5_dsm_calendar_calc(struct sparx5 *sparx5, u32 taxi,
 		}
 	}
 
+out_empty:
 	*cal_len = sparx5_dsm_cal_len(data->schedule);
 
 	return 0;
@@ -488,12 +489,10 @@ static int sparx5_dsm_calendar_check(struct sparx5 *sparx5,
 				     struct sparx5_calendar_data *data, u32 cal_length)
 {
 	u32 slot_indices[SPX5_DSM_CAL_LEN], distances[SPX5_DSM_CAL_LEN];
-	const struct sparx5_consts *consts = &sparx5->data->consts;
-	int devs_per_taxi = consts->dsm_cal_max_devs_per_taxi;
 	u32 num_of_slots, idx, port;
 	int cnt, max_dist;
 
-	for (port = 0; port < devs_per_taxi; port++) {
+	for (port = 0; port < SPX5_DSM_CAL_MAX_DEVS_PER_TAXI; port++) {
 		num_of_slots = 0;
 		max_dist = data->avg_dist[port];
 		for (idx = 0; idx < SPX5_DSM_CAL_LEN; idx++) {

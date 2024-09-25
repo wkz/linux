@@ -339,7 +339,7 @@ struct sparx5 {
 	const struct sparx5_match_data *data;
 	void __iomem *regs[NUM_TARGETS];
 	int port_count;
-	struct mutex lock; /* MAC reg lock */
+	spinlock_t lock; /* MAC reg lock */
 	/* port structures are in net device */
 	struct sparx5_port *ports[SPX5_PORTS];
 	enum sparx5_core_clockfreq coreclock;
@@ -515,7 +515,6 @@ struct sparx5_consts {
 	int hsch_queue_cnt;
 	int lb_group_cnt;
 	int pgid_cnt;
-	int dsm_cal_max_devs_per_taxi;
 	int dsm_cal_taxis;
 	int sio_clk_cnt;
 	int own_upsid_cnt;

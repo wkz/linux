@@ -1127,7 +1127,6 @@ static const struct sparx5_match_data sparx5_desc = {
 		.hsch_queue_cnt = 8,
 		.lb_group_cnt = 10,
 		.pgid_cnt = (2048 + 65),
-		.dsm_cal_max_devs_per_taxi = 13,
 		.dsm_cal_taxis = 8,
 		.sio_clk_cnt = 3,
 		.own_upsid_cnt = 3,

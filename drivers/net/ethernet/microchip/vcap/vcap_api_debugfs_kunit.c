@@ -312,7 +312,7 @@ static void vcap_api_addr_keyset_test(struct kunit *test)
 	};
 	enum vcap_keyfield_set keysets[10];
 	struct vcap_keyset_list matches;
-	int ret, idx, addr;
+	int ret, idx, addr, rd_ahead;
 
 	vcap_test_api_init(&admin);
 
@@ -320,7 +320,8 @@ static void vcap_api_addr_keyset_test(struct kunit *test)
 	matches.keysets = keysets;
 	matches.cnt = 0;
 	matches.max = ARRAY_SIZE(keysets);
-	for (idx = ARRAY_SIZE(keydata) - 1, addr = 799; idx > 0;
+	rd_ahead = test_vctrl.vcaps[VCAP_TYPE_IS2].sw_width / 32;
+	for (idx = ARRAY_SIZE(keydata) - 1 - rd_ahead, addr = 799; idx > 0;
 	     --idx, --addr) {
 		admin.cache.keystream = &keydata[idx];
 		admin.cache.maskstream = &mskdata[idx];

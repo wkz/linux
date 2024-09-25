@@ -468,7 +468,7 @@ int vcap_addr_keysets(struct vcap_control *vctrl,
 		return -EINVAL;
 	/* Decode and locate the keysets */
 	return vcap_find_keystream_keysets(vctrl, vt, admin->cache.keystream,
-					   admin->cache.maskstream, false, 0,
+					   admin->cache.maskstream, false, 1,
 					   kslist);
 }
 EXPORT_SYMBOL_GPL(vcap_addr_keysets);
