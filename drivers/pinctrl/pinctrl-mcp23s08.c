@@ -76,6 +76,9 @@ static const struct regmap_access_table mcp23x08_precious_table = {
 };
 
 const struct regmap_config mcp23x08_regmap = {
+	/* Protected by mcp->lock */
+	.disable_locking = true,
+
 	.reg_bits = 8,
 	.val_bits = 8,
 
@@ -121,6 +124,9 @@ static const struct regmap_access_table mcp23x17_precious_table = {
 };
 
 const struct regmap_config mcp23x17_regmap = {
+	/* Protected by mcp->lock */
+	.disable_locking = true,
+
 	.reg_bits = 8,
 	.val_bits = 16,
 
@@ -228,7 +234,9 @@ static int mcp_pinconf_get(struct pinctrl_dev *pctldev, unsigned int pin,
 
 	switch (param) {
 	case PIN_CONFIG_BIAS_PULL_UP:
+		mutex_lock(&mcp->lock);
 		ret = mcp_read(mcp, MCP_GPPU, &data);
+		mutex_unlock(&mcp->lock);
 		if (ret < 0)
 			return ret;
 		status = (data & BIT(pin)) ? 1 : 0;
@@ -257,7 +265,9 @@ static int mcp_pinconf_set(struct pinctrl_dev *pctldev, unsigned int pin,
 
 		switch (param) {
 		case PIN_CONFIG_BIAS_PULL_UP:
+			mutex_lock(&mcp->lock);
 			ret = mcp_set_bit(mcp, MCP_GPPU, pin, arg);
+			mutex_unlock(&mcp->lock);
 			break;
 		default:
 			dev_dbg(mcp->dev, "Invalid config param %04x\n", param);
