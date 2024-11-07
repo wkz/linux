@@ -224,6 +224,14 @@ static irqreturn_t armada8k_pcie_irq_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
+static struct armada8k_pcie *wkz_pcie;
+void wkz_pcie_ack(void)
+{
+	if (wkz_pcie)
+		armada8k_pcie_irq_handler(0, wkz_pcie);
+}
+EXPORT_SYMBOL(wkz_pcie_ack);
+
 static const struct dw_pcie_host_ops armada8k_pcie_host_ops = {
 	.host_init = armada8k_pcie_host_init,
 };
@@ -321,6 +329,7 @@ static int armada8k_pcie_probe(struct platform_device *pdev)
 	if (ret)
 		goto disable_phy;
 
+	wkz_pcie = pcie;
 	return 0;
 
 disable_phy:
